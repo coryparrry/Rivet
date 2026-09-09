@@ -178,7 +178,7 @@ test("switches an installed default provider to a custom endpoint and back while
       ),
       "utf8",
     ),
-    /CUSTOM_MODEL_API_KEY|models.example.com/,
+    /CUSTOM_MODEL_API_KEY|models\.example\.com/,
   );
 });
 
