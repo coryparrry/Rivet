@@ -175,7 +175,7 @@ d4a3edb106a9aedf7e6180e9ceb95c0ce76a3c23e0a614b5b69ceb4272193975  packages/rivet
 9f55d88806a5f80e1d316194c8f283a78ed00d73cb01f9a486953ad528714d1b  packages/rivet/test/compiler-drift-install.test.mjs
 bb8b6df60009d6d4bee860ac0f978ad1f269a52bfd27716397756515357770c9  packages/rivet/test/config.test.mjs
 d3bad4b16d2fe5193e0a79f92040ab27602355d7b1ecb07ad5491cdab0bb3c53  packages/rivet/test/custom-endpoint-fixtures.mjs
-884b67fd3e656ac0d6bfc5a3d7b57140ce46a0c3618fb083a012b19c1532c9ac  packages/rivet/test/custom-endpoint-install.test.mjs
+d810572e2bce7398265d91ea05991a5c55ec2ca6f98ce2cea4bcdfb23b573abd  packages/rivet/test/custom-endpoint-install.test.mjs
 7f973e20473b6d5c2c5a736500a18531bc58ee039fe9c579c6953074520b7102  packages/rivet/test/endpoint-trust.test.mjs
 cedf75b7769c9ccef963129ba6b406a8216a8d3d09956d86731084a781e4817a  packages/rivet/test/fixtures/custom-endpoints/baseline-rivet-issue-triage.lock.yml.gz.b64
 c32375d348580b72a36b6fd6c227ac7cd26d56f9c7d9a832fca15ae2e5a52c0a  packages/rivet/test/fixtures/custom-endpoints/baseline-rivet-maintenance.lock.yml.gz.b64
