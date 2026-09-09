@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { readFile } from "node:fs/promises";
 import { parseDocument } from "yaml";
 import { validateRivetConfig } from "./config.mjs";
 import { completeInstallationFiles } from "./installation-receipt.mjs";
@@ -29,6 +30,9 @@ function installedReviewShape(source) {
   }
   return {
     model,
+    includeAutoTagging: Boolean(value.jobs?.review_tags_pending),
+    includeFailureSafePendingTags:
+      value.jobs?.agent?.if === "needs.review_context.outputs.snapshot != ''",
     includePendingTagOutput:
       value.jobs?.review_tags_pending?.outputs?.output ===
       "${{ steps.pending-tags.outcome }}",
@@ -69,7 +73,18 @@ export async function buildModelConfigurationBaseline({
     config,
     reviewConfig,
     profiles: true,
+    includeAutoTagging: previous.includeAutoTagging,
+    includeFailureSafePendingTags: previous.includeFailureSafePendingTags,
     includePendingTagOutput: previous.includePendingTagOutput,
+    reviewExtension: previous.includeFailureSafePendingTags
+      ? undefined
+      : await readFile(
+          new URL(
+            "../assets/upgrades/pre-pending-tag-isolation/review-extension.md",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
     includeIssueTriage: config.issues.triage === "automatic",
     includeMaintenance: config.maintenance.mode !== "disabled",
   });

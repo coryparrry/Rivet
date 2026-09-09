@@ -28,77 +28,94 @@ async function repository(t) {
   };
 }
 
-test("combines a released workflow upgrade with an endpoint change and preserves edited files", async (t) => {
-  const oldSource = await readFile(
-    new URL(
-      "./fixtures/pre-pending-tag-output/rivet-review.md",
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  const oldLock = gunzipSync(
-    Buffer.from(
-      await readFile(
-        new URL(
-          "./fixtures/pre-pending-tag-output/rivet-review.lock.yml.gz.b64",
-          import.meta.url,
+for (const previous of [
+  "pre-auto-tagging",
+  "pre-pending-tag-isolation",
+  "pre-pending-tag-output",
+]) {
+  test(`combines ${previous} upgrade with an endpoint change and preserves edited files`, async (t) => {
+    const oldSource = await readFile(
+      new URL(`./fixtures/${previous}/rivet-review.md`, import.meta.url),
+      "utf8",
+    );
+    const oldLock = gunzipSync(
+      Buffer.from(
+        await readFile(
+          new URL(
+            `./fixtures/${previous}/rivet-review.lock.yml.gz.b64`,
+            import.meta.url,
+          ),
+          "utf8",
         ),
-        "utf8",
+        "base64",
       ),
-      "base64",
-    ),
-  ).toString("utf8");
-  for (const edited of [null, "md", "lock.yml"]) {
-    const options = await repository(t);
-    options.compileWorkflow = async (input) => {
+    ).toString("utf8");
+    for (const edited of [null, "md", "lock.yml"]) {
+      const options = await repository(t);
+      options.compileWorkflow = async (input) => {
+        const file = path.join(
+          input.repositoryRoot,
+          ".github/workflows",
+          input.workflowId,
+        );
+        if (
+          input.workflowId === "rivet-review" &&
+          (await readFile(`${file}.md`, "utf8")) === oldSource
+        )
+          await writeFile(`${file}.lock.yml`, oldLock);
+        else await endpointFixtureCompiler(input);
+      };
+      await applyInstallation(await prepareReviewInstallation(options));
       const file = path.join(
-        input.repositoryRoot,
-        ".github/workflows",
-        input.workflowId,
+        options.repositoryRoot,
+        ".github/workflows/rivet-review",
       );
-      if (
-        input.workflowId === "rivet-review" &&
-        (await readFile(`${file}.md`, "utf8")) === oldSource
-      )
-        await writeFile(`${file}.lock.yml`, oldLock);
-      else await endpointFixtureCompiler(input);
-    };
-    await applyInstallation(await prepareReviewInstallation(options));
-    const file = path.join(
-      options.repositoryRoot,
-      ".github/workflows/rivet-review",
-    );
-    await writeFile(`${file}.md`, oldSource);
-    await writeFile(`${file}.lock.yml`, oldLock);
-    const configuration = customEndpointConfiguration();
-    await writeFile(
-      path.join(options.repositoryRoot, ".github/rivet.json"),
-      `${JSON.stringify(configuration, null, 4)}\n`,
-    );
-    if (edited) {
-      const content = `${await readFile(`${file}.${edited}`, "utf8")}\nUser customization\n`;
-      await writeFile(`${file}.${edited}`, content);
-      await assert.rejects(
-        prepareReviewInstallation({ ...options, configuration }),
-        /refusing to overwrite/,
+      await writeFile(`${file}.md`, oldSource);
+      await writeFile(`${file}.lock.yml`, oldLock);
+      if (previous !== "pre-pending-tag-output")
+        await writeFile(
+          path.join(
+            options.repositoryRoot,
+            ".github/rivet/aw/review-extension.md",
+          ),
+          await readFile(
+            new URL(
+              "../assets/upgrades/pre-pending-tag-isolation/review-extension.md",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        );
+      const configuration = customEndpointConfiguration();
+      await writeFile(
+        path.join(options.repositoryRoot, ".github/rivet.json"),
+        `${JSON.stringify(configuration, null, 4)}\n`,
       );
-      assert.equal(await readFile(`${file}.${edited}`, "utf8"), content);
-    } else {
-      await applyInstallation(
-        await prepareReviewInstallation({ ...options, configuration }),
-      );
-      assert.match(
-        await readFile(`${file}.lock.yml`, "utf8"),
-        /steps\.pending-tags\.outcome/,
-      );
-      const repeat = await prepareReviewInstallation({
-        ...options,
-        configuration,
-      });
-      assert.ok(repeat.files.every(({ status }) => status === "unchanged"));
+      if (edited) {
+        const content = `${await readFile(`${file}.${edited}`, "utf8")}\nUser customization\n`;
+        await writeFile(`${file}.${edited}`, content);
+        await assert.rejects(
+          prepareReviewInstallation({ ...options, configuration }),
+          /refusing to overwrite/,
+        );
+        assert.equal(await readFile(`${file}.${edited}`, "utf8"), content);
+      } else {
+        await applyInstallation(
+          await prepareReviewInstallation({ ...options, configuration }),
+        );
+        assert.match(
+          await readFile(`${file}.lock.yml`, "utf8"),
+          /steps\.pending-tags\.outcome/,
+        );
+        const repeat = await prepareReviewInstallation({
+          ...options,
+          configuration,
+        });
+        assert.ok(repeat.files.every(({ status }) => status === "unchanged"));
+      }
     }
-  }
-});
+  });
+}
 
 test("installs custom endpoints through all model workflows and remains idempotent", async (t) => {
   const options = await repository(t);
