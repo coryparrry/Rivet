@@ -20,12 +20,9 @@ import {
 } from "./config.mjs";
 import { compileGhAwWorkflow, validateGhAwWorkflow } from "./gh-aw/compile.mjs";
 import { inspectCompiledWorkflow } from "./gh-aw/inspect.mjs";
-import {
-  assessIssueTriageTrust,
-  assessMaintenanceTrust,
-  assessPullRequestTargetTrust,
-} from "./gh-aw/trust.mjs";
+import { assertInstallationTrust } from "./installation-trust.mjs";
 import { completeInstallationFiles } from "./installation-receipt.mjs";
+import { buildModelConfigurationBaseline } from "./model-configuration-upgrade.mjs";
 import { buildTaggingUpgradeBaselines } from "./tagging-upgrade.mjs";
 import {
   buildIssueTriageUpgradeBaselines,
@@ -34,7 +31,6 @@ import {
 } from "./issue-triage-upgrade.mjs";
 import {
   RIVET_ISSUE_TRIAGE_NATIVE_IMPORTS,
-  RIVET_ISSUE_TRIAGE_PUBLISH_SCRIPT,
   RIVET_ISSUE_TRIAGE_WORKFLOW_ID,
 } from "./workflows/issue-triage.mjs";
 import {
@@ -45,10 +41,7 @@ import {
   RIVET_REPAIR_NATIVE_IMPORTS,
   RIVET_REPAIR_WORKFLOW_ID,
 } from "./workflows/repair.mjs";
-import {
-  RIVET_REVIEW_NATIVE_IMPORTS,
-  RIVET_REVIEW_WORKFLOW_ID,
-} from "./workflows/review.mjs";
+import { RIVET_REVIEW_WORKFLOW_ID } from "./workflows/review.mjs";
 import {
   buildWorkflowFiles,
   ISSUE_CONTEXT_ASSET_PATHS,
@@ -63,13 +56,6 @@ import {
 export { knownCompilerDrift } from "./workflow-compatibility.mjs";
 const [ISSUE_TRIAGER_IMPORT] = RIVET_ISSUE_TRIAGE_NATIVE_IMPORTS;
 const [FIXER_IMPORT] = RIVET_REPAIR_NATIVE_IMPORTS;
-const REVIEW_LOCAL_ACTIONS = Object.freeze([
-  "./.github/rivet/actions/authority-receipt",
-  "./.github/rivet/actions/prepare-review-context",
-]);
-const ISSUE_LOCAL_ACTIONS = Object.freeze([
-  "./.github/rivet/actions/prepare-issue-context",
-]);
 const V013_REVIEW_EXTENSION = new URL(
   "../assets/upgrades/v0.1.3/review-extension.md",
   import.meta.url,
@@ -82,7 +68,6 @@ const V013_PREPARE_REVIEW_CONTEXT = new URL(
   "../assets/upgrades/v0.1.13/prepare-review-context-index.mjs",
   import.meta.url,
 );
-const MAINTENANCE_LOCAL_ACTION = "./.github/rivet/actions/validate-audit";
 const MAINTENANCE_MANAGED_PATHS = Object.freeze([
   RIVET_MAINTENANCE_NATIVE_IMPORTS[0],
   ...MAINTENANCE_ASSET_PATHS,
@@ -228,6 +213,12 @@ async function prepareInstallation({
   onProgress?.("Preparing Rivet installation");
   const root = path.resolve(repositoryRoot ?? process.cwd());
   const config = validateRivetConfig(configuration);
+  if (config.models.review.endpoint) {
+    env = { ...(env ?? process.env) };
+    delete env[config.models.review.endpoint.apiKeySecret];
+    delete env.CODEX_API_KEY;
+    delete env.OPENAI_API_KEY;
+  }
   const reviewConfig = reviewConfiguration(mode, config);
   const productAuthority = productAuthoritySummary(config);
   const githubApp =
@@ -262,64 +253,27 @@ async function prepareInstallation({
     const authority = inspectCompiledWorkflow(
       files.get(`.github/workflows/${RIVET_REVIEW_WORKFLOW_ID}.lock.yml`),
     );
-    const trust = assessPullRequestTargetTrust({
-      authority,
-      expectedEngine: config.models.review.engine,
-      expectedImports: RIVET_REVIEW_NATIVE_IMPORTS,
-      expectedLocalActions: REVIEW_LOCAL_ACTIONS,
-      expectedModel: config.models.review.model,
-      expectedMaximumFindings: config.review.maximumFindings,
-      expectedIssueTriage:
-        config.issues.triage === "automatic" ? "automatic" : "disabled",
-    });
-    if (!trust.trusted) {
-      throw new Error(
-        `Rivet installer: compiled review workflow is not trusted: ${trust.violations.join("; ")}`,
-      );
-    }
-    if (config.issues.triage === "automatic") {
-      const issueAuthority = inspectCompiledWorkflow(
-        files.get(
-          `.github/workflows/${RIVET_ISSUE_TRIAGE_WORKFLOW_ID}.lock.yml`,
-        ),
-      );
-      const issueTrust = assessIssueTriageTrust({
-        authority: issueAuthority,
-        expectedEngine: config.models.review.engine,
-        expectedImports: RIVET_ISSUE_TRIAGE_NATIVE_IMPORTS,
-        expectedLocalActions: ISSUE_LOCAL_ACTIONS,
-        expectedModel: config.models.review.model,
-        expectedPublisherScript: RIVET_ISSUE_TRIAGE_PUBLISH_SCRIPT,
+    const endpoint = config.models.review.endpoint;
+    let trustFiles = files;
+    if (endpoint) {
+      const baselineConfig = structuredClone(config);
+      delete baselineConfig.models.review.endpoint;
+      trustFiles = await buildWorkflowFiles({
+        stagingRoot: path.join(stagingRoot, "endpoint-baseline"),
+        mode,
+        config: baselineConfig,
+        reviewConfig: reviewConfiguration(mode, baselineConfig),
+        validation,
+        binaryPath,
+        compileWorkflow,
+        validateWorkflow,
+        env,
+        profiles: true,
+        includeIssueTriage: config.issues.triage === "automatic",
+        includeMaintenance: config.maintenance.mode !== "disabled",
       });
-      if (!issueTrust.trusted) {
-        throw new Error(
-          `Rivet installer: compiled issue triage workflow is not trusted: ${issueTrust.violations.join("; ")}`,
-        );
-      }
     }
-    if (config.maintenance.mode !== "disabled") {
-      const maintenanceAuthority = inspectCompiledWorkflow(
-        files.get(
-          `.github/workflows/${RIVET_MAINTENANCE_WORKFLOW_ID}.lock.yml`,
-        ),
-      );
-      const maintenanceTrust = assessMaintenanceTrust({
-        authority: maintenanceAuthority,
-        expectedEngine: config.models.review.engine,
-        expectedImports: RIVET_MAINTENANCE_NATIVE_IMPORTS,
-        expectedLocalActions: [MAINTENANCE_LOCAL_ACTION],
-        expectedModel: config.models.review.model,
-        expectedTriggers:
-          config.maintenance.mode === "scheduled"
-            ? ["schedule", "workflow_dispatch"]
-            : ["workflow_dispatch"],
-      });
-      if (!maintenanceTrust.trusted) {
-        throw new Error(
-          `Rivet installer: compiled maintenance workflow is not trusted: ${maintenanceTrust.violations.join("; ")}`,
-        );
-      }
-    }
+    assertInstallationTrust({ files, trustFiles, config });
     completeInstallationFiles(files, { mode, config });
     onProgress?.("Checking existing Rivet installation");
     const baselines = [];
@@ -332,6 +286,22 @@ async function prepareInstallation({
         ]),
       ),
     );
+    const existingConfigurationContent =
+      existingFiles.get(".github/rivet.json");
+    if (existingConfigurationContent !== null) {
+      try {
+        if (
+          isDeepStrictEqual(
+            validateRivetConfig(JSON.parse(existingConfigurationContent)),
+            config,
+          )
+        ) {
+          files.set(".github/rivet.json", existingConfigurationContent);
+        }
+      } catch {
+        // A malformed or incompatible file remains subject to the overwrite checks.
+      }
+    }
     const requiresUpgrade = [...files].some(
       ([relativePath, content]) =>
         existingFiles.get(relativePath) !== null &&
@@ -342,6 +312,24 @@ async function prepareInstallation({
           content,
         ),
     );
+    let modelBaseline = null;
+    if (requiresUpgrade) {
+      modelBaseline = await buildModelConfigurationBaseline({
+        previousConfigurationContent: existingConfigurationContent,
+        previousSource: existingFiles.get(
+          `.github/workflows/${RIVET_REVIEW_WORKFLOW_ID}.md`,
+        ),
+        stagingRoot: path.join(stagingRoot, "previous-model-configuration"),
+        mode,
+        config,
+        validation,
+        binaryPath,
+        compileWorkflow,
+        validateWorkflow,
+        env,
+      });
+      if (modelBaseline) baselines.push(modelBaseline);
+    }
     if (config.maintenance.mode === "disabled") {
       const existingMaintenanceFiles = new Map(
         await Promise.all(
@@ -383,16 +371,18 @@ async function prepareInstallation({
             "Rivet installer: refusing to delete .github/rivet.json",
           );
         }
-        const previousFiles = await buildMaintenanceVariant({
-          stagingRoot: path.join(stagingRoot, "previous-maintenance"),
-          mode,
-          config: existingConfiguration,
-          validation,
-          binaryPath,
-          compileWorkflow,
-          validateWorkflow,
-          env,
-        });
+        const previousFiles =
+          modelBaseline ??
+          (await buildMaintenanceVariant({
+            stagingRoot: path.join(stagingRoot, "previous-maintenance"),
+            mode,
+            config: existingConfiguration,
+            validation,
+            binaryPath,
+            compileWorkflow,
+            validateWorkflow,
+            env,
+          }));
         if (
           existingConfigurationContent !==
           previousFiles.get(".github/rivet.json")
@@ -442,16 +432,18 @@ async function prepareInstallation({
         ) {
           const previousConfiguration = structuredClone(config);
           previousConfiguration.maintenance.mode = previousMaintenanceMode;
-          const previousFiles = await buildMaintenanceVariant({
-            stagingRoot: path.join(stagingRoot, "previous-maintenance"),
-            mode,
-            config: previousConfiguration,
-            validation,
-            binaryPath,
-            compileWorkflow,
-            validateWorkflow,
-            env,
-          });
+          const previousFiles =
+            modelBaseline ??
+            (await buildMaintenanceVariant({
+              stagingRoot: path.join(stagingRoot, "previous-maintenance"),
+              mode,
+              config: previousConfiguration,
+              validation,
+              binaryPath,
+              compileWorkflow,
+              validateWorkflow,
+              env,
+            }));
           if (
             existingConfigurationContent !==
               previousFiles.get(".github/rivet.json") ||

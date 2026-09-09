@@ -8,6 +8,7 @@ import {
   RIVET_APP_PRIVATE_KEY_SECRET,
 } from "../app-authority.mjs";
 import { nativeImportsFrontmatter } from "./review.mjs";
+import { modelEngineFrontmatter } from "../model-endpoint.mjs";
 
 export const RIVET_ISSUE_TRIAGE_WORKFLOW_ID = "rivet-issue-triage";
 export const RIVET_ISSUE_TRIAGE_NATIVE_IMPORTS = Object.freeze([
@@ -245,9 +246,7 @@ jobs:
           RIVET_APP_BOT_LOGIN: \${{ vars.${RIVET_APP_BOT_LOGIN_VARIABLE} }}
   safe_outputs:
     if: needs.agent.result == 'success'
-engine: ${model.engine}
-model: ${model.model}
-${nativeImportsFrontmatter(nativeImports)}tools:
+${modelEngineFrontmatter(model)}${nativeImportsFrontmatter(nativeImports)}tools:
   bash: []
   cli-proxy: false
   github:

@@ -64,6 +64,64 @@ Rivet does not recreate provider SDKs or expose arbitrary engine configuration.
 Advanced upstream features remain native gh-aw imports until Rivet promotes a
 stable product-level control.
 
+## Custom model endpoints
+
+Codex accepts an optional `models.review.endpoint` object with exactly two
+fields: `baseUrl` and `apiKeySecret`. Existing schema-v4 configurations do not
+need this object. For example, replace the `models.review` value with:
+
+```json
+{
+  "engine": "codex",
+  "model": "deepseek-v4-flash",
+  "effort": "default",
+  "endpoint": {
+    "baseUrl": "https://api.deepseek.com/v1",
+    "apiKeySecret": "DEEPSEEK_API_KEY"
+  }
+}
+```
+
+The endpoint must support the Codex Responses API, including streaming and tool
+calls. OpenAI Chat Completions compatibility alone is insufficient. Model
+discovery must advertise the configured model at `<basePath>/models`, or
+`/v1/models` when the base URL has no path. The pinned compiler's separate
+threat-detection proxy retains its upstream model selection behavior.
+The model must also have pricing in the
+[pinned proxy's catalog](https://github.com/github/gh-aw-firewall/blob/v0.27.44/containers/api-proxy/models.dev.catalog.json): its credit
+budget rejects unknown model names with `unknown_model_ai_credits`, even if
+the provider advertises them. Custom pricing is not configurable here.
+The documented DeepSeek v4 model names are catalogued. DeepSeek documents its
+[Codex integration](https://api-docs.deepseek.com/quick_start/agent_integrations/codex/).
+
+`baseUrl` accepts an HTTPS DNS URL on the default HTTPS port, with an optional
+path. Credentials, query strings, fragments, IP addresses, encoded path segments
+and shell expressions are rejected. `apiKeySecret` is an uppercase GitHub
+Actions secret name, never the key value. GitHub access tokens and Rivet App
+credentials cannot be selected as model credentials.
+
+Rivet maps that secret to both Codex credential variables, adds the endpoint's
+exact hostname to the workflow network policy, and passes the endpoint to the
+main and threat-detection runs. The main agent's proxy model fallback and token
+steering are disabled. Review, issue triage, enabled maintenance and
+owner-authorized repair use the custom endpoint and configured model.
+
+Store the key using `gh secret set DEEPSEEK_API_KEY`, then run
+`rivet init --review-only --dry-run` to inspect the workflow changes.
+Run `rivet init --review-only` to apply them locally, and commit the configuration
+and generated files together. Use the corresponding `--repair` commands for an
+existing repair installation.
+For the setup-PR route, first merge the configuration into the default branch
+and synchronize the local checkout to that exact remote commit, then run
+`rivet init --review-only --setup-pr`.
+Guided `rivet init` also recognizes and can store the configured secret.
+Changing or removing the endpoint regenerates recognized managed workflows;
+unrecognized local workflow modifications still block an overwrite.
+
+The endpoint control currently requires `engine: "codex"`. Live provider
+authentication and an adopter Actions run remain separate from local compiler
+verification.
+
 ## Issue boundary
 
 `issues.triage` may be `automatic` or `disabled` for an installation.

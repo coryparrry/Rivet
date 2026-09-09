@@ -3,6 +3,7 @@ import {
   maintenanceWorkflowProjection,
 } from "../config.mjs";
 import { nativeImportsFrontmatter } from "./review.mjs";
+import { modelEngineFrontmatter } from "../model-endpoint.mjs";
 
 export const RIVET_MAINTENANCE_WORKFLOW_ID = "rivet-maintenance";
 
@@ -33,9 +34,7 @@ ${triggerFrontmatter(maintenance.mode)}permissions:
 checkout:
   ref: \${{ github.sha }}
   fetch-depth: 1
-engine: ${maintenance.engine}
-model: ${maintenance.model}
-${nativeImportsFrontmatter(RIVET_MAINTENANCE_NATIVE_IMPORTS)}safe-outputs:
+${modelEngineFrontmatter(maintenance)}${nativeImportsFrontmatter(RIVET_MAINTENANCE_NATIVE_IMPORTS)}safe-outputs:
   missing-tool: false
   missing-data: false
   report-failure-as-issue: false

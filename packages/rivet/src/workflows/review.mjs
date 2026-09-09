@@ -1,4 +1,5 @@
 import { DEFAULT_RIVET_CONFIG, reviewWorkflowProjection } from "../config.mjs";
+import { modelEngineFrontmatter as engineFrontmatter } from "../model-endpoint.mjs";
 import {
   RIVET_APP_BOT_LOGIN_VARIABLE,
   RIVET_APP_CLIENT_ID_VARIABLE,
@@ -256,10 +257,6 @@ export function nativeImportsFrontmatter(nativeImports) {
   return `inlined-imports: true\nimports:\n${nativeImports
     .map((nativeImport) => `  - ${nativeImport}`)
     .join("\n")}\n`;
-}
-
-function engineFrontmatter({ engine, model }) {
-  return `engine: ${engine}\nmodel: ${model}\n`;
 }
 
 function safeOutputsAppFrontmatter() {

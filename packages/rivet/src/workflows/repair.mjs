@@ -4,6 +4,8 @@ import {
 } from "../app-authority.mjs";
 import { normalizeValidationCommands } from "../validation-runner.mjs";
 import { nativeImportsFrontmatter } from "./review.mjs";
+import { DEFAULT_RIVET_CONFIG, validateRivetConfig } from "../config.mjs";
+import { modelEngineFrontmatter } from "../model-endpoint.mjs";
 
 export const RIVET_REPAIR_WORKFLOW_ID = "rivet-repair";
 export const RIVET_REPAIR_NATIVE_IMPORTS = Object.freeze([
@@ -25,9 +27,14 @@ function encodedValidationCommands(commands) {
 export function renderRivetRepairWorkflow({
   nativeImports = RIVET_REPAIR_NATIVE_IMPORTS,
   validation = ["npm test"],
+  configuration = DEFAULT_RIVET_CONFIG,
 } = {}) {
   const commands = validationCommands(validation);
   const encodedCommands = encodedValidationCommands(validation);
+  const configuredModel = validateRivetConfig(configuration).models.review;
+  const model = configuredModel.endpoint
+    ? configuredModel
+    : DEFAULT_RIVET_CONFIG.models.review;
   return `---
 name: Rivet pull request repair
 on:
@@ -41,9 +48,7 @@ permissions:
   pull-requests: read
 checkout:
   fetch-depth: 0
-engine: codex
-model: gpt-5.6-luna
-${nativeImportsFrontmatter(nativeImports)}safe-outputs:
+${modelEngineFrontmatter(model)}${nativeImportsFrontmatter(nativeImports)}safe-outputs:
   max-patch-files: 25
   report-failure-as-issue: false
   report-failed-jobs: false

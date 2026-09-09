@@ -187,6 +187,7 @@ export async function buildWorkflowFiles({
         ? renderRivetRepairWorkflow({
             nativeImports: RIVET_REPAIR_NATIVE_IMPORTS,
             validation,
+            configuration: config,
           })
         : renderRivetRepairWorkflowV012({ validation }),
     );

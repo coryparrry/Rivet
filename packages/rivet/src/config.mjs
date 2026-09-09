@@ -1,3 +1,5 @@
+import { validateModelEndpoint } from "./model-endpoint.mjs";
+
 export const RIVET_CONFIG_SCHEMA_VERSION = 4;
 
 export const DEFAULT_RIVET_CONFIG = Object.freeze({
@@ -21,12 +23,15 @@ export const DEFAULT_RIVET_CONFIG = Object.freeze({
   }),
 });
 
-function object(value, path, keys) {
+function object(value, path, keys, optional = []) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Rivet config: ${path} must be an object`);
   }
   const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
+  const expected = [
+    ...keys,
+    ...optional.filter((key) => Object.hasOwn(value, key)),
+  ].sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`Rivet config: ${path} has unsupported or missing fields`);
   }
@@ -112,7 +117,12 @@ export function validateRivetConfig(value) {
   choice(value.merge.authority, "merge.authority", ["never"]);
 
   object(value.models, "models", ["review"]);
-  object(value.models.review, "models.review", ["engine", "model", "effort"]);
+  object(
+    value.models.review,
+    "models.review",
+    ["engine", "model", "effort"],
+    ["endpoint"],
+  );
   choice(value.models.review.engine, "models.review.engine", [
     "codex",
     "claude",
@@ -120,6 +130,12 @@ export function validateRivetConfig(value) {
     "gemini",
   ]);
   model(value.models.review.model);
+  if (Object.hasOwn(value.models.review, "endpoint")) {
+    validateModelEndpoint(
+      value.models.review.endpoint,
+      value.models.review.engine,
+    );
+  }
   choice(value.models.review.effort, "models.review.effort", [
     "default",
     "low",
@@ -204,6 +220,11 @@ export function productAuthoritySummary(value) {
     `Issue triage is ${config.issues.triage}.`,
     `Issue implementation is ${config.issues.implementation}.`,
     `Maintenance is ${config.maintenance.mode}.`,
+    ...(config.models.review.endpoint
+      ? [
+          `Model calls use ${new URL(config.models.review.endpoint.baseUrl).href} with the ${config.models.review.endpoint.apiKeySecret} Actions secret.`,
+        ]
+      : []),
     "Merge is impossible.",
   ]);
 }

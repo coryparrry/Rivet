@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DEFAULT_RIVET_CONFIG } from "../config.mjs";
 
 const MAINTENANCE_SHARED_SECRETS = [
   "COPILOT_GITHUB_TOKEN",
@@ -75,11 +76,30 @@ function digest(value) {
     .digest("hex");
 }
 
+function maintenanceEnvironment(env, authority) {
+  const modelKeys = new Set([
+    "GH_AW_INFO_MODEL",
+    "GH_AW_ENGINE_MODEL",
+    "GH_AW_MODEL_AGENT_CODEX",
+    "GH_AW_MODEL_DETECTION_CODEX",
+  ]);
+  return Object.fromEntries(
+    Object.entries(env ?? {}).map(([key, value]) => [
+      key,
+      modelKeys.has(key)
+        ? value === authority.metadata?.agent_model
+          ? DEFAULT_RIVET_CONFIG.models.review.model
+          : null
+        : value,
+    ]),
+  );
+}
+
 function maintenanceActionInventory(authority) {
   return {
     actions: (authority.actions ?? []).map(
       ({ env, if: condition, job, uses, with: actionWith }) => ({
-        env: env ?? {},
+        env: maintenanceEnvironment(env, authority),
         if: condition ?? null,
         job,
         uses,
@@ -93,7 +113,7 @@ function maintenanceActionInventory(authority) {
         if: condition,
         run,
         shell,
-        env,
+        env: maintenanceEnvironment(env, authority),
       }),
     ),
   };
@@ -108,11 +128,18 @@ function maintenanceJobAuthorityInventory(authority) {
           { container, env, environment, permissions, runsOn, services },
         ]) => [
           job,
-          { container, env, environment, permissions, runsOn, services },
+          {
+            container,
+            env: maintenanceEnvironment(env, authority),
+            environment,
+            permissions,
+            runsOn,
+            services,
+          },
         ],
       ),
     ),
-    workflowEnv: authority.workflowEnv ?? {},
+    workflowEnv: maintenanceEnvironment(authority.workflowEnv, authority),
   };
 }
 

@@ -84,6 +84,37 @@ approval from a GitHub administrator.
 
 ## Advanced/manual setup
 
+Codex supports custom Responses-compatible endpoints, including DeepSeek.
+Set `models.review` in `.github/rivet.json` to your model and endpoint:
+
+```json
+{
+  "engine": "codex",
+  "model": "deepseek-v4-flash",
+  "effort": "default",
+  "endpoint": {
+    "baseUrl": "https://api.deepseek.com/v1",
+    "apiKeySecret": "DEEPSEEK_API_KEY"
+  }
+}
+```
+
+Keep the other configuration fields. Store the key with
+`gh secret set DEEPSEEK_API_KEY`, inspect the changes with
+`rivet init --review-only --dry-run`, then apply them with
+`rivet init --review-only` and commit the configuration and generated files
+together. To use `--setup-pr`, first merge the configuration into the default
+branch and synchronize the local checkout to that exact remote commit.
+Use `--repair` for an existing repair installation. Guided setup also
+recognizes the configured secret.
+
+Custom endpoints require HTTPS on the default port and Codex-compatible
+Responses, streaming, tool calls and model discovery. The model also needs
+pricing in the pinned proxy's catalog; unknown model names are rejected by
+its credit budget. See the
+[endpoint contract](https://github.com/coryparrry/Rivet/blob/main/docs/RIVET_SCHEMA_V4.md#custom-model-endpoints)
+for supported URL shapes and the pinned threat-detection model-selection boundary.
+
 Use [INSTALL.md](https://github.com/coryparrry/Rivet/blob/main/INSTALL.md) for
 the full guided, verification, and repair flow. The lower-level commands remain
 available when you need manual recovery:
