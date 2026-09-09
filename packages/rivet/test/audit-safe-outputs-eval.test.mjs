@@ -254,7 +254,7 @@ test("CLI runs from an installed path and rejects agent errors", async (context)
   const runs = path.join(root, "runs");
   const runDirectory = path.join(runs, "001");
   const installedBin = path.join(root, "rivet-audit-eval");
-  const values = artifacts();
+  const values = artifacts(new Date());
   await mkdir(path.join(runDirectory, "aw-prompts"), { recursive: true });
   await symlink(EVALUATOR, installedBin);
   await Promise.all([
