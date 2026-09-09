@@ -137,6 +137,13 @@ test("resets a stale ready label even when the new comparison exceeds its budget
     jobs.review_tags_pending.if,
     "needs.pre_activation.outputs.activated == 'true'",
   );
+  assert.equal(
+    jobs.review_tags_pending.outputs.output,
+    "${{ steps.pending-tags.outcome }}",
+  );
+  assert.ok(
+    jobs.review_tags_pending.steps.some((step) => step.id === "pending-tags"),
+  );
   assert.ok(ancestors("agent").includes("review_context"));
   assert.ok(ancestors("agent").includes("review_tags_pending"));
   assert.match(jobs.agent.if, /needs\.activation/);

@@ -20,6 +20,7 @@ const EXTENSION_PATH = ".github/rivet/aw/review-extension.md";
 // Frozen from the last general-review installation before auto tagging,
 // source commit 83927a86; these fixtures retain conversation-memory support.
 const PREVIOUS_FIXTURES = "test/fixtures/pre-auto-tagging";
+const PRE_OUTPUT_FIXTURES = "test/fixtures/pre-pending-tag-output";
 const PRE_ISOLATION_FIXTURES = "test/fixtures/pre-pending-tag-isolation";
 
 async function compressedFixture(relativePath) {
@@ -48,7 +49,9 @@ async function fixtureCompiler({ repositoryRoot, workflowId }) {
         ? await previousLock()
         : workflow === (await previousWorkflow(PRE_ISOLATION_FIXTURES))
           ? await previousLock(PRE_ISOLATION_FIXTURES)
-          : await currentReviewLock(PACKAGE_ROOT, workflow);
+          : workflow === (await previousWorkflow(PRE_OUTPUT_FIXTURES))
+            ? await previousLock(PRE_OUTPUT_FIXTURES)
+            : await currentReviewLock(PACKAGE_ROOT, workflow);
   } else if (workflowId === "rivet-issue-triage") {
     lock = await compressedFixture(
       "test/fixtures/issue-triage/rivet-issue-triage.lock.yml.gz.b64",
@@ -77,6 +80,7 @@ async function restorePreviousInstallation(repositoryRoot, fixtures) {
     path.join(repositoryRoot, LOCK_PATH),
     await previousLock(fixtures),
   );
+  if (fixtures === PRE_OUTPUT_FIXTURES) return;
   await writeFile(
     path.join(repositoryRoot, EXTENSION_PATH),
     await readFile(
@@ -119,7 +123,11 @@ test("CLI preserves customized configuration during an installation refresh", as
   );
 });
 
-for (const fixtures of [PREVIOUS_FIXTURES, PRE_ISOLATION_FIXTURES]) {
+for (const fixtures of [
+  PREVIOUS_FIXTURES,
+  PRE_ISOLATION_FIXTURES,
+  PRE_OUTPUT_FIXTURES,
+]) {
   test(`CLI upgrades ${fixtures} review installation directly to repair`, async (t) => {
     const repositoryRoot = await repository(t);
     const options = {
@@ -177,7 +185,11 @@ for (const fixtures of [PREVIOUS_FIXTURES, PRE_ISOLATION_FIXTURES]) {
   });
 }
 
-for (const fixtures of [PREVIOUS_FIXTURES, PRE_ISOLATION_FIXTURES]) {
+for (const fixtures of [
+  PREVIOUS_FIXTURES,
+  PRE_ISOLATION_FIXTURES,
+  PRE_OUTPUT_FIXTURES,
+]) {
   for (const [mode, install] of [
     ["review", installReview],
     ["repair", installRepair],
@@ -220,7 +232,9 @@ for (const fixtures of [PREVIOUS_FIXTURES, PRE_ISOLATION_FIXTURES]) {
         result.files
           .filter(({ status }) => status === "update")
           .map(({ path: relativePath }) => relativePath),
-        [EXTENSION_PATH, LOCK_PATH, WORKFLOW_PATH],
+        fixtures === PRE_OUTPUT_FIXTURES
+          ? [LOCK_PATH, WORKFLOW_PATH]
+          : [EXTENSION_PATH, LOCK_PATH, WORKFLOW_PATH],
       );
       const upgraded = await readFile(
         path.join(repositoryRoot, WORKFLOW_PATH),

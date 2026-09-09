@@ -829,6 +829,20 @@ test("rejects model-driven repository read authority", async () => {
 test("binds the complete review graph and execution controls", async () => {
   const { authority } = await compiledAuthority();
   const mutations = [];
+  const pendingOutput = structuredClone(authority.jobAuthority);
+  pendingOutput.review_tags_pending.outputs.output =
+    "${{ secrets.RIVET_APP_PRIVATE_KEY }}";
+  mutations.push(["pending tag output", { jobAuthority: pendingOutput }]);
+  mutations.push([
+    "pending tag step identity",
+    {
+      actions: authority.actions.map((action) =>
+        action.job === "review_tags_pending" && action.id === "pending-tags"
+          ? { ...action, id: "renamed" }
+          : action,
+      ),
+    },
+  ]);
 
   const triggerConfig = structuredClone(authority.triggerConfig);
   triggerConfig.pull_request_target.types.push("closed");

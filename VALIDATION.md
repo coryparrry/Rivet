@@ -43,7 +43,24 @@ npm --prefix packages/rivet run review-lock:check
 Use the pinned compiler, YAML parsing, and actionlint on the relevant workflow
 surface. A parsed workflow or passing source test alone does not prove a live
 GitHub run. CI runs package checks on pinned Node 22 and 24 versions and checks
-GitHub Actions workflows with actionlint.
+GitHub Actions workflows and all current compiled adopter fixtures with actionlint.
+
+GitHub supports `concurrency.queue: max`; actionlint 1.7.12 does not recognize
+that field. The lint preparation script validates the supported queue value,
+requires a group and non-cancelling behavior, and removes only that pair from a
+temporary copy. The shipped workflow keeps queueing; every other field and line
+number reaches actionlint unchanged. Compiled fixtures disable the optional
+ShellCheck/Pyflakes analyzers; repository workflow lint retains them.
+
+```bash
+node packages/rivet/scripts/prepare-workflow-lint.mjs /tmp/rivet-workflow-lint
+actionlint -shellcheck= -pyflakes= /tmp/rivet-workflow-lint/*.yml
+```
+
+When review authority changes, regenerate its inventories from the pinned
+compiler with `node packages/rivet/scripts/refresh-review-authority.mjs --write`.
+The release check independently reproduces all four engines and both issue
+triage modes and rejects stale inventories.
 
 ## Source and package integrity
 

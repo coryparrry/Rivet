@@ -4,7 +4,7 @@ import { validateRivetConfig } from "./config.mjs";
 import { completeInstallationFiles } from "./installation-receipt.mjs";
 import { buildWorkflowFiles } from "./workflow-files.mjs";
 
-function installedModel(source) {
+function installedReviewShape(source) {
   if (typeof source !== "string") return null;
   const frontmatter = source.match(/^---\n([\s\S]*?)\n---\n/);
   if (!frontmatter) return null;
@@ -27,7 +27,12 @@ function installedModel(source) {
     if (!secret || env?.OPENAI_API_KEY !== env.CODEX_API_KEY) return null;
     model.endpoint = { baseUrl: env.OPENAI_BASE_URL, apiKeySecret: secret };
   }
-  return model;
+  return {
+    model,
+    includePendingTagOutput:
+      value.jobs?.review_tags_pending?.outputs?.output ===
+      "${{ steps.pending-tags.outcome }}",
+  };
 }
 
 // Reconstruct only model settings, then require the complete installed files
@@ -37,7 +42,8 @@ export async function buildModelConfigurationBaseline({
   previousConfigurationContent,
   ...options
 }) {
-  const previousModel = installedModel(previousSource);
+  const previous = installedReviewShape(previousSource);
+  const previousModel = previous?.model;
   if (
     !previousModel ||
     isDeepStrictEqual(previousModel, options.config.models.review)
@@ -63,6 +69,7 @@ export async function buildModelConfigurationBaseline({
     config,
     reviewConfig,
     profiles: true,
+    includePendingTagOutput: previous.includePendingTagOutput,
     includeIssueTriage: config.issues.triage === "automatic",
     includeMaintenance: config.maintenance.mode !== "disabled",
   });

@@ -31,9 +31,19 @@ export async function buildTaggingUpgradeBaselines({
       includeMaintenance: options.config.maintenance.mode !== "disabled",
       includeAutoTagging,
       includeFailureSafePendingTags: false,
+      includePendingTagOutput: false,
       reviewExtension,
     });
     baselines.push(completeInstallationFiles(files, options));
   }
+  const beforeOutput = await buildWorkflowFiles({
+    ...options,
+    stagingRoot: path.join(stagingRoot, "before-pending-tag-output"),
+    profiles: true,
+    includeIssueTriage: options.config.issues.triage === "automatic",
+    includeMaintenance: options.config.maintenance.mode !== "disabled",
+    includePendingTagOutput: false,
+  });
+  baselines.push(completeInstallationFiles(beforeOutput, options));
   return baselines;
 }
