@@ -1,4 +1,9 @@
 import { spawn } from "node:child_process";
+import {
+  MODEL_SECRETS,
+  sanitizedEnvironment,
+  repositoryProbeEnvironment,
+} from "./guided-environment.mjs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { configureReviewApp, verifyReviewApp } from "./app-setup.mjs";
@@ -7,6 +12,7 @@ import {
   reviewAppRegistrationUrl,
 } from "./app-authority.mjs";
 import { prepareReviewInstallation } from "./install.mjs";
+import { validateRivetConfig } from "./config.mjs";
 import { readRivetConfiguration } from "./repository-config.mjs";
 import {
   createReviewSetupPullRequest,
@@ -15,7 +21,6 @@ import {
 } from "./setup-pr.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const MODEL_SECRETS = Object.freeze(["CODEX_API_KEY", "OPENAI_API_KEY"]);
 const MAX_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 function write(stdout, message) {
@@ -40,31 +45,6 @@ function validRepository(repository) {
       .split("/")
       .every((segment) => segment !== "." && segment !== "..")
   );
-}
-
-function sanitizedEnvironment(environment) {
-  const env = { ...environment, GH_HOST: "github.com" };
-  for (const name of [...MODEL_SECRETS, "GH_REPO"]) delete env[name];
-  const pathKey = Object.keys(env).find(
-    (name) => name.toLowerCase() === "path",
-  );
-  if (pathKey && typeof env[pathKey] === "string") {
-    env[pathKey] = env[pathKey]
-      .split(path.delimiter)
-      .filter((entry) => {
-        if (!entry || !path.isAbsolute(entry)) return false;
-        const normalized = entry
-          .replaceAll("\\", "/")
-          .replace(/\/+$/u, "")
-          .toLowerCase();
-        return (
-          normalized !== "node_modules/.bin" &&
-          !normalized.endsWith("/node_modules/.bin")
-        );
-      })
-      .join(path.delimiter);
-  }
-  return env;
 }
 
 async function runCommand(command, args, options = {}) {
@@ -130,6 +110,7 @@ async function configuredModelSecret({
   repositoryRoot,
   repository,
   env,
+  modelSecrets = MODEL_SECRETS,
 }) {
   let secrets;
   try {
@@ -155,7 +136,7 @@ async function configuredModelSecret({
   if (!Array.isArray(secrets)) {
     invalidPreflight("GitHub returned invalid Actions secret metadata");
   }
-  return MODEL_SECRETS.find((name) =>
+  return modelSecrets.find((name) =>
     secrets.some((secret) => secret?.name === name),
   );
 }
@@ -226,7 +207,7 @@ async function resolveOriginRepository({ runner, repositoryRoot, env }) {
   }
 }
 
-async function preflight({ runner, repositoryRoot, env }) {
+async function preflight({ runner, repositoryRoot, env, modelSecrets }) {
   const status = await runner(
     "git",
     ["status", "--porcelain=v1", "--untracked-files=all"],
@@ -337,6 +318,7 @@ async function preflight({ runner, repositoryRoot, env }) {
     repositoryRoot,
     repository,
     env,
+    modelSecrets,
   });
   return Object.freeze({
     repositoryRoot,
@@ -347,7 +329,12 @@ async function preflight({ runner, repositoryRoot, env }) {
   });
 }
 
-async function assertPreflightStillCurrent({ runner, preflightResult, env }) {
+async function assertPreflightStillCurrent({
+  runner,
+  preflightResult,
+  env,
+  modelSecrets,
+}) {
   const { repositoryRoot, repository, defaultBranch } = preflightResult;
   const status = await runner(
     "git",
@@ -416,6 +403,7 @@ async function assertPreflightStillCurrent({ runner, preflightResult, env }) {
     repositoryRoot,
     repository,
     env,
+    modelSecrets,
   });
   if (existingModelSecret !== preflightResult.existingModelSecret) {
     invalidPreflight(
@@ -556,7 +544,9 @@ export async function runGuidedInit(options = {}) {
     });
   const credentialEnvironment =
     options.env ?? options.environment ?? process.env;
-  const env = sanitizedEnvironment(credentialEnvironment);
+  const env = sanitizedEnvironment(credentialEnvironment, [
+    explicitConfiguration?.models?.review?.endpoint?.apiKeySecret,
+  ]);
   const stdout = stdio.stdout;
   const onProgress =
     options.onProgress ??
@@ -585,11 +575,15 @@ export async function runGuidedInit(options = {}) {
   const resolvedRepositoryRoot = await resolveRepositoryRoot({
     runner,
     cwd: repositoryRoot ?? cwd,
-    env,
+    env: repositoryProbeEnvironment(env),
   });
   const configuration =
     explicitConfiguration ??
     (await readRivetConfigurationImpl(resolvedRepositoryRoot));
+  if (configuration) validateRivetConfig(configuration);
+  const endpoint = configuration?.models.review.endpoint;
+  const modelSecrets = endpoint ? [endpoint.apiKeySecret] : MODEL_SECRETS;
+  for (const name of modelSecrets) delete env[name];
   if (configuration?.repair?.authority === "owner") {
     throw new Error(
       "Rivet init: this repository uses repair mode; update it with rivet init --repair --setup-pr",
@@ -600,6 +594,7 @@ export async function runGuidedInit(options = {}) {
     runner,
     repositoryRoot: resolvedRepositoryRoot,
     env,
+    modelSecrets,
   });
   onProgress?.("Compiling and checking the review workflows");
   const preparedPlan = await prepareReviewInstallationImpl({
@@ -650,7 +645,12 @@ export async function runGuidedInit(options = {}) {
     await prompt.input("Path to the GitHub App private-key PEM:"),
     "GitHub App private-key PEM path",
   );
-  await assertPreflightStillCurrent({ runner, preflightResult, env });
+  await assertPreflightStillCurrent({
+    runner,
+    preflightResult,
+    env,
+    modelSecrets,
+  });
   onProgress?.("Configuring the review GitHub App");
   const app = await configureReviewAppImpl({
     repository: preflightResult.repository,
@@ -700,7 +700,7 @@ export async function runGuidedInit(options = {}) {
       }),
   });
 
-  const environmentModelSecret = MODEL_SECRETS.find(
+  const environmentModelSecret = modelSecrets.find(
     (name) =>
       typeof credentialEnvironment[name] === "string" &&
       credentialEnvironment[name],
@@ -708,6 +708,7 @@ export async function runGuidedInit(options = {}) {
   const modelSecret =
     preflightResult.existingModelSecret ??
     environmentModelSecret ??
+    endpoint?.apiKeySecret ??
     (await selectModelSecret(prompt));
   const modelSecretAlreadyConfigured = Boolean(
     preflightResult.existingModelSecret,
@@ -725,7 +726,12 @@ export async function runGuidedInit(options = {}) {
     write(stdout, result.guidance);
     return result;
   }
-  await assertPreflightStillCurrent({ runner, preflightResult, env });
+  await assertPreflightStillCurrent({
+    runner,
+    preflightResult,
+    env,
+    modelSecrets,
+  });
   if (!modelSecretAlreadyConfigured) {
     onProgress?.("Saving the model credential");
     await setModelSecret({

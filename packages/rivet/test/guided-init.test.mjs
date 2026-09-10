@@ -49,7 +49,11 @@ function runner({
   const calls = [];
   let currentStatus = status;
   const run = async (command, args, options = {}) => {
-    calls.push({ command, args, options });
+    calls.push({
+      command,
+      args,
+      options: { ...options, env: { ...options.env } },
+    });
     if (
       command === "git" &&
       args[0] === "rev-parse" &&
@@ -201,6 +205,91 @@ test("guides the ordered review-only setup without exposing credentials", async 
   );
   assert.doesNotMatch(JSON.stringify(result), /rivet\.pem/);
   assert.doesNotMatch(JSON.stringify(result), new RegExp(CLIENT_ID));
+});
+
+test("stores only the configured custom provider key and keeps it out of helper environments", async () => {
+  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+  configuration.models.review.endpoint = {
+    baseUrl: "https://models.example.com/v1",
+    apiKeySecret: "CUSTOM_MODEL_API_KEY",
+  };
+  const fakeRunner = runner({
+    existingSecrets: ["CODEX_API_KEY", "OPENAI_API_KEY"],
+  });
+  const stdout = output();
+  const deps = dependencies();
+  let uploadedSecret;
+  const result = await runGuidedInit({
+    cwd: ROOT,
+    readRivetConfigurationImpl: async () => configuration,
+    env: {
+      CUSTOM_MODEL_API_KEY: MODEL_SECRET,
+      CODEX_API_KEY: "unused-default-key",
+    },
+    runner: (command, args, options) => {
+      if (args[0] === "secret" && args[1] === "set")
+        uploadedSecret = options.input.toString();
+      return fakeRunner.run(command, args, options);
+    },
+    prompt: {
+      ...prompt(),
+      selectModelSecret: () => {
+        throw new Error("secret name is already configured");
+      },
+    },
+    openUrl: async () => {},
+    stdout: stdout.stream,
+    ...deps,
+  });
+  assert.deepEqual(result.modelSecret, {
+    name: "CUSTOM_MODEL_API_KEY",
+    action: "stored",
+  });
+  const secretCommand = fakeRunner.calls.find(
+    ({ args }) => args[0] === "secret" && args[1] === "set",
+  );
+  assert.equal(secretCommand.args[2], "CUSTOM_MODEL_API_KEY");
+  assert.equal(uploadedSecret, MODEL_SECRET);
+  assert.ok(secretCommand.options.input.every((byte) => byte === 0));
+  for (const { options } of fakeRunner.calls) {
+    assert.equal(options.env.CUSTOM_MODEL_API_KEY, undefined);
+    assert.equal(options.env.CODEX_API_KEY, undefined);
+  }
+  assert.equal(
+    deps.setup[0].configuration.models.review.endpoint.apiKeySecret,
+    "CUSTOM_MODEL_API_KEY",
+  );
+  assert.ok(!stdout.read().includes(MODEL_SECRET));
+  assert.ok(!JSON.stringify(result).includes(MODEL_SECRET));
+});
+
+test("reuses a custom endpoint secret when its Actions metadata already exists", async () => {
+  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+  configuration.models.review.endpoint = {
+    baseUrl: "https://models.example.com/v1",
+    apiKeySecret: "CUSTOM_MODEL_API_KEY",
+  };
+  const fakeRunner = runner({
+    existingSecrets: ["CODEX_API_KEY", "CUSTOM_MODEL_API_KEY"],
+  });
+  const result = await runGuidedInit({
+    cwd: ROOT,
+    configuration,
+    runner: fakeRunner.run,
+    prompt: prompt(),
+    openUrl: async () => {},
+    stdout: output().stream,
+    ...dependencies(),
+  });
+  assert.deepEqual(result.modelSecret, {
+    name: "CUSTOM_MODEL_API_KEY",
+    action: "already-configured",
+  });
+  assert.ok(
+    !fakeRunner.calls.some(
+      ({ args }) => args[0] === "secret" && args[1] === "set",
+    ),
+  );
 });
 
 test("loads configuration from the resolved repository root when invoked below it", async (t) => {
@@ -765,9 +854,12 @@ test("passes an exported model secret only through bounded standard input", asyn
   assert.doesNotMatch(stdout.read(), new RegExp(MODEL_SECRET));
   assert.doesNotMatch(JSON.stringify(result), new RegExp(MODEL_SECRET));
   assert.equal(
-    fakeRunner.calls.every(({ options }) => options.env?.KEEP_ME === "visible"),
+    fakeRunner.calls
+      .slice(1)
+      .every(({ options }) => options.env?.KEEP_ME === "visible"),
     true,
   );
+  assert.equal(fakeRunner.calls[0].options.env.KEEP_ME, undefined);
   assert.equal(preparedEnvironment.CODEX_API_KEY, undefined);
   assert.equal(preparedEnvironment.KEEP_ME, "visible");
   assert.equal(

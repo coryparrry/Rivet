@@ -73,6 +73,12 @@ flow.
 
 ## Advanced/manual setup
 
+Codex workflows can use custom Responses-compatible model endpoints. Set
+`models.review.endpoint.baseUrl` and `models.review.endpoint.apiKeySecret` in
+`.github/rivet.json`, then regenerate the managed workflows. See
+[custom endpoint configuration](docs/RIVET_SCHEMA_V4.md#custom-model-endpoints)
+for a DeepSeek example and setup instructions.
+
 The explicit commands remain available for preview, recovery, and automation:
 
 ```bash

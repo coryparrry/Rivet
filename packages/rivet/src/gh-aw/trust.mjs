@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DEFAULT_RIVET_CONFIG } from "../config.mjs";
 
 const MAINTENANCE_SHARED_SECRETS = [
   "COPILOT_GITHUB_TOKEN",
@@ -22,16 +23,16 @@ export const RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256 =
 export const RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256 =
   "74b5d1f0163c93c16b6a7a44aee902ba4f529433bdc0a08748cfad74184771dc";
 export const RIVET_REVIEW_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
-  claude: "09a020e0935fceeb809c9b5619ee660a527213f926acf366c2361021595db792",
-  codex: "b442d91c52397a7d1cbadae346db179a6c9bb6e1bff307844279fca9bae30f82",
-  copilot: "e1eda4a6db3a586fe2af89a86b7a8413aeae8e3f0d60452405b7133afa064c2b",
-  gemini: "f7739ac26323f272fc5e9a1db17e0e977ae90301f3cf7f34041082578707061b",
+  claude: "7280c2bd98016857bb6629586cf40d43dfb7818b8f60aa6b452085e62801c089",
+  codex: "203de54388dbd3ea637932c87a12dbea8df53dc97a95b1898626d2fe7f126b91",
+  copilot: "86769dcfe232ae25590f0601606bf531e889b14cb42c1588db215c6eed57bda8",
+  gemini: "a375ee66efe0a1f7b7eff51e023b07853d8599c73f876538cdad63815527c3d1",
 });
 export const RIVET_REVIEW_DISABLED_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
-  claude: "5bc77107bb6e0b18eef966189140ab9f9e94bdccb410a84009f1e72fe57d3726",
-  codex: "629b26686268fa707926344c05dd98efa7f49a1185cae9106bbf524da8d9bbe7",
-  copilot: "8250057d4203c0cbe194914d55e7469b365863c3cd22d7378a2a95d631d1ddea",
-  gemini: "01f44089b2cd660e68ca7c0b90584d35c2b2d9a56712e9e8b052ad53a0e27c2e",
+  claude: "c83c29dd2d4533102a024f07db0dc5a41ce3c11d02cd672f9cdf1f40a0a204e3",
+  codex: "21026591246428e5f5b9eac8a04057c73901569560d252404f67ae7e967288fb",
+  copilot: "b02876f648bf8a3498ccfb7bf13db146f4e18c58756ad211e191dd3dccf9601c",
+  gemini: "32d497f55becc5409d1987a72806fdc2ec03c9d9dfdf9ef66dc85124593974bd",
 });
 export const RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
   claude: "f1ac491b665080316eb9ae1c0b9762b58d39e416c09677dd28a6e54d5ccf5ea4",
@@ -75,11 +76,30 @@ function digest(value) {
     .digest("hex");
 }
 
+function maintenanceEnvironment(env, authority) {
+  const modelKeys = new Set([
+    "GH_AW_INFO_MODEL",
+    "GH_AW_ENGINE_MODEL",
+    "GH_AW_MODEL_AGENT_CODEX",
+    "GH_AW_MODEL_DETECTION_CODEX",
+  ]);
+  return Object.fromEntries(
+    Object.entries(env ?? {}).map(([key, value]) => [
+      key,
+      modelKeys.has(key)
+        ? value === authority.metadata?.agent_model
+          ? DEFAULT_RIVET_CONFIG.models.review.model
+          : null
+        : value,
+    ]),
+  );
+}
+
 function maintenanceActionInventory(authority) {
   return {
     actions: (authority.actions ?? []).map(
       ({ env, if: condition, job, uses, with: actionWith }) => ({
-        env: env ?? {},
+        env: maintenanceEnvironment(env, authority),
         if: condition ?? null,
         job,
         uses,
@@ -93,7 +113,7 @@ function maintenanceActionInventory(authority) {
         if: condition,
         run,
         shell,
-        env,
+        env: maintenanceEnvironment(env, authority),
       }),
     ),
   };
@@ -108,11 +128,18 @@ function maintenanceJobAuthorityInventory(authority) {
           { container, env, environment, permissions, runsOn, services },
         ]) => [
           job,
-          { container, env, environment, permissions, runsOn, services },
+          {
+            container,
+            env: maintenanceEnvironment(env, authority),
+            environment,
+            permissions,
+            runsOn,
+            services,
+          },
         ],
       ),
     ),
-    workflowEnv: authority.workflowEnv ?? {},
+    workflowEnv: maintenanceEnvironment(authority.workflowEnv, authority),
   };
 }
 
@@ -249,6 +276,10 @@ function reviewAuthorityInventory(authority) {
     workflowDefaults: authority.workflowDefaults ?? null,
     workflowEnv: normalizeReviewEnv(authority.workflowEnv, authority),
   };
+}
+
+export function reviewAuthorityDigest(authority) {
+  return digest(reviewAuthorityInventory(authority));
 }
 
 function issueTriageAuthorityInventory(authority) {
@@ -727,7 +758,7 @@ export function assessPullRequestTargetTrust({
         : undefined);
   if (
     !reviewAuthoritySha256 ||
-    digest(reviewAuthorityInventory(authority)) !== reviewAuthoritySha256 ||
+    reviewAuthorityDigest(authority) !== reviewAuthoritySha256 ||
     !reviewWriteAuthorityIsNarrow(authority) ||
     !reviewSafeOutputsAreBounded(authority, expectedIssueTriage) ||
     (authority.safeOutputConfig?.create_pull_request_review_comment &&

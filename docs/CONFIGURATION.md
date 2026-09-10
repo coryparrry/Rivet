@@ -90,6 +90,10 @@ the new permission takes effect. `issues.implementation` must remain
 
 The `models.review` engine, model, and effort are also used for incoming issue
 triage. The current default is Codex with `gpt-5.6-luna` and `default` effort.
+Codex also accepts an optional `endpoint` containing `baseUrl` and
+`apiKeySecret` for Responses-compatible providers such as DeepSeek. See
+[custom model endpoints](RIVET_SCHEMA_V4.md#custom-model-endpoints) for the
+configuration, credential setup and protocol requirements.
 After context preparation, an eligible review clears stale Rivet status and
 test labels and applies `review needed`, including when no review snapshot is
 available. After successful current-head review publication, Rivet replaces
