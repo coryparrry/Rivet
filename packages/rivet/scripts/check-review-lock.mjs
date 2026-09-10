@@ -10,7 +10,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { DEFAULT_RIVET_CONFIG } from "../src/config.mjs";
 import { ensureGhAwBinary } from "../src/gh-aw/binary.mjs";
 import {
@@ -260,6 +260,7 @@ export async function checkMaintenanceLocks({
 }
 
 export async function checkReviewLock({
+  write = false,
   fixtureRoot = FIXTURE_ROOT,
   temporaryParent = os.tmpdir(),
   ensureBinary = ensureGhAwBinary,
@@ -333,6 +334,18 @@ export async function checkReviewLock({
         workflowId: WORKFLOW_ID,
         binaryPath,
       });
+
+      if (write) {
+        const generated = await readFile(temporaryLock);
+        await writeFile(
+          variant.source
+            ? path.join(fixtureRoot, `${variant.name}.gz.b64`)
+            : path.join(fixtureRoot, LOCK_PATH),
+          variant.source
+            ? gzipSync(generated).toString("base64") + "\n"
+            : generated,
+        );
+      }
 
       const [checkedIn, regenerated] = await Promise.all([
         variant.readFixture(),

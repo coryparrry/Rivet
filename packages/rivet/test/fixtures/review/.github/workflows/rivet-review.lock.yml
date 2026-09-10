@@ -1118,7 +1118,7 @@ jobs:
             await main();
       - name: Save daily AIC usage cache
         id: save-daily-aic-cache
-        if: always()
+        if: always() && github.event_name != 'pull_request_target'
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

@@ -51,6 +51,7 @@ import {
 } from "./workflow-files.mjs";
 import {
   knownCompilerDrift,
+  knownUsageCacheUpgrade,
   matchesWorkflowBaseline,
 } from "./workflow-compatibility.mjs";
 export { knownCompilerDrift } from "./workflow-compatibility.mjs";
@@ -687,6 +688,7 @@ async function prepareInstallation({
           current === null ||
           current === content ||
           knownCompilerDrift(relativePath, current, content) ||
+          knownUsageCacheUpgrade(relativePath, current, content) ||
           matchesHistoricalManagedFile(relativePath, digest(current)) ||
           matchesWorkflowBaseline(relativePath, current, baseline)
         );
@@ -700,6 +702,7 @@ async function prepareInstallation({
       const canUpgrade =
         current !== null &&
         (knownCompilerDrift(relativePath, current, content) ||
+          knownUsageCacheUpgrade(relativePath, current, content) ||
           matchesHistoricalManagedFile(relativePath, digest(current)) ||
           compatibleBaselines.some((baseline) =>
             matchesWorkflowBaseline(relativePath, current, baseline),

@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { ensureGhAwBinary } from "./binary.mjs";
 import { GH_AW_RELEASE } from "./versions.mjs";
+import { applyUsageCachePolicy } from "./usage-cache.mjs";
 
 const execFileAsync = promisify(execFile);
 const WORKFLOW_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -109,6 +111,9 @@ export async function compileGhAwWorkflow({
   );
   if (compiledFile !== expectedFile)
     fail("compile returned an unexpected output path");
+  const source = await readFile(compiledFile, "utf8");
+  const adjusted = applyUsageCachePolicy(source);
+  if (adjusted !== source) await writeFile(compiledFile, adjusted);
   return Object.freeze({
     compiledFile,
     report: output.result,

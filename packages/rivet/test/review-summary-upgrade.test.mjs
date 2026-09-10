@@ -10,6 +10,7 @@ import { DEFAULT_RIVET_CONFIG } from "../src/config.mjs";
 import { installReview } from "../src/install.mjs";
 import { renderRivetReviewWorkflowV0113 } from "../src/workflows/review.mjs";
 import { currentReviewLock } from "./review-lock-fixtures.mjs";
+import { applyUsageCachePolicy } from "../src/gh-aw/usage-cache.mjs";
 
 const PACKAGE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -62,7 +63,10 @@ async function fixtureCompiler({ repositoryRoot, workflowId }) {
   const lock = workflow.includes("For every complete comparison")
     ? await currentReviewLock(PACKAGE_ROOT, workflow)
     : await releasedLock();
-  await writeFile(path.join(repositoryRoot, LOCK_PATH), lock);
+  await writeFile(
+    path.join(repositoryRoot, LOCK_PATH),
+    applyUsageCachePolicy(lock),
+  );
 }
 
 async function repository(t) {
@@ -128,4 +132,32 @@ test("upgrades only an exact 0.1.13 review summary", async (t) => {
       assert.equal(await readFile(target, "utf8"), modified);
     });
   }
+});
+
+test("upgrades an unconditional usage cache save and remains idempotent", async (t) => {
+  const repositoryRoot = await repository(t);
+  const options = {
+    repositoryRoot,
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: async () => {},
+    configuration: configuration(),
+  };
+  await installReview(options);
+  const lockPath = ".github/workflows/rivet-review.lock.yml";
+  const absolute = path.join(repositoryRoot, lockPath);
+  const planned = await readFile(absolute, "utf8");
+  const legacy = planned.replace(
+    "always() && github.event_name != 'pull_request_target'",
+    "always()",
+  );
+  assert.notEqual(legacy, planned);
+  await writeFile(absolute, legacy);
+  const result = await installReview(options);
+  assert.equal(
+    result.files.find((file) => file.path === lockPath).status,
+    "update",
+  );
+  assert.equal(await readFile(absolute, "utf8"), planned);
+  const repeated = await installReview(options);
+  assert.ok(repeated.files.every((file) => file.status === "unchanged"));
 });
