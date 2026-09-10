@@ -4,6 +4,7 @@ import { parseDocument } from "yaml";
 import { validateRivetConfig } from "./config.mjs";
 import { completeInstallationFiles } from "./installation-receipt.mjs";
 import { buildWorkflowFiles } from "./workflow-files.mjs";
+import { PRE_REVIEW_STATUS_EXTENSION } from "./tagging-upgrade.mjs";
 
 function installedReviewShape(source) {
   if (typeof source !== "string") return null;
@@ -36,6 +37,11 @@ function installedReviewShape(source) {
     includePendingTagOutput:
       value.jobs?.review_tags_pending?.outputs?.output ===
       "${{ steps.pending-tags.outcome }}",
+    useClientIdInput: Boolean(
+      value.jobs?.review_tags_pending?.steps?.find(
+        (step) => step.id === "review-token",
+      )?.with?.["client-id"],
+    ),
   };
 }
 
@@ -76,8 +82,11 @@ export async function buildModelConfigurationBaseline({
     includeAutoTagging: previous.includeAutoTagging,
     includeFailureSafePendingTags: previous.includeFailureSafePendingTags,
     includePendingTagOutput: previous.includePendingTagOutput,
+    useClientIdInput: previous.useClientIdInput,
     reviewExtension: previous.includeFailureSafePendingTags
-      ? undefined
+      ? previous.useClientIdInput
+        ? undefined
+        : await readFile(PRE_REVIEW_STATUS_EXTENSION, "utf8")
       : await readFile(
           new URL(
             "../assets/upgrades/pre-pending-tag-isolation/review-extension.md",

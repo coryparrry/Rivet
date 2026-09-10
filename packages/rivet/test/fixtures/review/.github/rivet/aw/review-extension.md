@@ -31,6 +31,20 @@ jobs:
         env:
           GITHUB_API_URL: ${{ github.api_url }}
           GITHUB_TOKEN: ${{ github.token }}
+  review_context_status:
+    needs: review_context
+    if: always() && needs.review_context.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require complete review context
+        env:
+          RIVET_CONTEXT_READY: ${{ needs.review_context.result == 'success' && needs.review_context.outputs.snapshot != '' }}
+        run: |
+          if [ "$RIVET_CONTEXT_READY" != "true" ]; then
+            echo "::error::Rivet review blocked: context preparation failed. See the review_context annotations for the cause."
+            exit 1
+          fi
 tools:
   bash: []
   cli-proxy: false

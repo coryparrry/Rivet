@@ -75,6 +75,7 @@ test("inspects the pinned Rivet review fixture authority", async () => {
   assert.deepEqual(authority.jobConditions.agent.needs, [
     "activation",
     "review_context",
+    "review_context_status",
     "review_tags_pending",
   ]);
   assert.equal(authority.githubMcpEnabled, false);

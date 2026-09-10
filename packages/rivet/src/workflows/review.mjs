@@ -273,7 +273,11 @@ function issueTriageFrontmatter({ issueTriage }) {
   return `  create-issue:\n    title-prefix: "[rivet] "\n    max: 1\n    deduplicate-by-title: true\n`;
 }
 
-function pendingTaggingJobFrontmatter(enabled, includeOutput) {
+function pendingTaggingJobFrontmatter(
+  enabled,
+  includeOutput,
+  useClientIdInput,
+) {
   if (!enabled) return "";
   return `  review_tags_pending:
     needs: pre_activation
@@ -284,7 +288,7 @@ ${includeOutput ? "    outputs:\n      output: ${{ steps.pending-tags.outcome }}
       - id: review-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: \${{ vars.${RIVET_APP_CLIENT_ID_VARIABLE} }}
+          ${useClientIdInput ? "client-id" : "app-id"}: \${{ vars.${RIVET_APP_CLIENT_ID_VARIABLE} }}
           private-key: \${{ secrets.${RIVET_APP_PRIVATE_KEY_SECRET} }}
           owner: \${{ github.repository_owner }}
           repositories: \${{ github.event.repository.name }}
@@ -299,7 +303,7 @@ ${RIVET_REVIEW_TAG_PENDING_SCRIPT.split("\n")
 `;
 }
 
-function autoTaggingFrontmatter(enabled) {
+function autoTaggingFrontmatter(enabled, useClientIdInput) {
   if (!enabled) return "";
   return `  jobs:
     publish-review-tags:
@@ -323,7 +327,7 @@ function autoTaggingFrontmatter(enabled) {
         - id: review-token
           uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
           with:
-            app-id: \${{ vars.${RIVET_APP_CLIENT_ID_VARIABLE} }}
+            ${useClientIdInput ? "client-id" : "app-id"}: \${{ vars.${RIVET_APP_CLIENT_ID_VARIABLE} }}
             private-key: \${{ secrets.${RIVET_APP_PRIVATE_KEY_SECRET} }}
             owner: \${{ github.repository_owner }}
             repositories: \${{ github.event.repository.name }}
@@ -405,6 +409,7 @@ export function renderRivetReviewWorkflow({
   includeAutoTagging = true,
   includeFailureSafePendingTags = true,
   includePendingTagOutput = true,
+  useClientIdInput = true,
 } = {}) {
   const review = reviewWorkflowProjection(configuration);
   const failureSafePendingTags =
@@ -421,12 +426,12 @@ on:
 ${includeReviewBudget ? "  needs: [review_context]\n" : ""}permissions:
   contents: read
   pull-requests: read
-${includeReviewBudget ? "checkout: false\n" : "checkout:\n  sparse-checkout: |\n    .github/rivet/actions/authority-receipt\n"}${engineFrontmatter(review)}${includeReviewBudget ? `max-turns: 3\njobs:\n${pendingTaggingJobFrontmatter(includeAutoTagging, includePendingTagOutput)}${includeAutoTagging ? `  agent:\n    needs: [review_tags_pending]\n${failureSafePendingTags ? "    if: needs.review_context.outputs.snapshot != ''\n" : ""}` : ""}  safe_outputs:\n    if: needs.agent.result == 'success'\n` : includeLegacyReviewBudget ? "max-turns: 6\njobs:\n  safe_outputs:\n    if: needs.agent.result == 'success'\n" : ""}${nativeImportsFrontmatter(nativeImports)}safe-outputs:
+${includeReviewBudget ? "checkout: false\n" : "checkout:\n  sparse-checkout: |\n    .github/rivet/actions/authority-receipt\n"}${engineFrontmatter(review)}${includeReviewBudget ? `max-turns: 3\njobs:\n${pendingTaggingJobFrontmatter(includeAutoTagging, includePendingTagOutput, useClientIdInput)}${includeAutoTagging ? `  agent:\n    needs: [review_tags_pending]\n${failureSafePendingTags ? "    if: needs.review_context.outputs.snapshot != ''\n" : ""}` : ""}  safe_outputs:\n    if: needs.agent.result == 'success'\n` : includeLegacyReviewBudget ? "max-turns: 6\njobs:\n  safe_outputs:\n    if: needs.agent.result == 'success'\n" : ""}${nativeImportsFrontmatter(nativeImports)}safe-outputs:
 ${safeOutputsAppFrontmatter()}  report-failure-as-issue: false
   report-failed-jobs: false
   report-incomplete:
     create-issue: false
-${inlineFindingsFrontmatter(review)}${autoTaggingFrontmatter(includeAutoTagging)}  submit-pull-request-review:
+${inlineFindingsFrontmatter(review)}${autoTaggingFrontmatter(includeAutoTagging, useClientIdInput)}  submit-pull-request-review:
     allowed-events: [${reviewEvents}]
 ${issueTriageFrontmatter(review)}---
 
