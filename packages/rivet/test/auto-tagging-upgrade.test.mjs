@@ -61,7 +61,9 @@ async function fixtureCompiler({ repositoryRoot, workflowId }) {
     );
   } else {
     assert.equal(workflowId, "rivet-repair");
-    lock = "name: rivet-repair-current\n";
+    lock = await compressedFixture(
+      "test/fixtures/repair/rivet-repair.lock.yml.gz.b64",
+    );
   }
   await writeFile(
     path.join(repositoryRoot, `.github/workflows/${workflowId}.lock.yml`),

@@ -75,9 +75,15 @@ async function repository(t) {
   return { root, remote };
 }
 
-function runner(calls) {
+function runner(
+  calls,
+  { fail, beforeRun, pullRequestList, pullRequestUrl, pullRequestView } = {},
+) {
   return async (command, args, { cwd }) => {
     calls.push([command, args]);
+    await beforeRun?.({ command, args, cwd });
+    const failure = fail?.({ command, args, cwd });
+    if (failure) throw new Error(failure);
     if (command === "gh" && args[0] === "repo") {
       return JSON.stringify({
         nameWithOwner: "acme/example",
@@ -88,17 +94,38 @@ function runner(calls) {
       return "https://github.com/acme/example.git";
     }
     if (command === "gh" && args[0] === "pr" && args[1] === "create") {
-      return "https://github.com/acme/example/pull/17";
+      return pullRequestUrl ?? "https://github.com/acme/example/pull/17";
     }
     if (command === "gh" && args[0] === "pr" && args[1] === "view") {
-      return JSON.stringify({
-        baseRefName: "main",
-        headRefName: "rivet/setup-test",
-        headRefOid: await git(cwd, ["rev-parse", "HEAD"]),
-        isDraft: true,
-        state: "OPEN",
-        url: "https://github.com/acme/example/pull/17",
-      });
+      return JSON.stringify(
+        pullRequestView ?? {
+          baseRefName: "main",
+          headRefName: "rivet/setup-test",
+          headRefOid: await git(cwd, ["rev-parse", "HEAD"]),
+          isDraft: true,
+          state: "OPEN",
+          url: "https://github.com/acme/example/pull/17",
+        },
+      );
+    }
+    if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+      if (pullRequestList === "exact") {
+        return JSON.stringify([
+          {
+            baseRefName: "main",
+            headRefName: "rivet/setup-test",
+            headRefOid: await git(cwd, ["rev-parse", "rivet/setup-test"]),
+            isDraft: true,
+            state: "OPEN",
+            title: "chore: set up Rivet review",
+            url: "https://github.com/acme/example/pull/17",
+          },
+        ]);
+      }
+      return JSON.stringify(pullRequestList ?? []);
+    }
+    if (command === "gh" && args[0] === "pr" && args[1] === "close") {
+      return "";
     }
     return git(cwd, args);
   };
@@ -183,6 +210,413 @@ test("creates a verified draft setup pull request without merging", async (t) =>
   assert.match(
     pullRequestCall[1][pullRequestCall[1].indexOf("--body") + 1],
     /workflows selected in the configuration/,
+  );
+});
+
+test("cleans up after pull-request creation fails immediately after push", async (t) => {
+  const { root, remote } = await repository(t);
+  const calls = [];
+  let failed = false;
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        fail: ({ command, args }) => {
+          if (
+            !failed &&
+            command === "gh" &&
+            args[0] === "pr" &&
+            args[1] === "create"
+          ) {
+            failed = true;
+            return "gh pr create failed";
+          }
+          return null;
+        },
+      }),
+    }),
+    /gh pr create failed/,
+  );
+
+  assert.equal(await git(root, ["branch", "--show-current"]), "main");
+  assert.equal(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+  assert.equal(
+    await git(remote, [
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/heads/rivet/setup-test",
+    ]),
+    "",
+  );
+  assert.ok(
+    calls.some(
+      ([command, args]) =>
+        command === "git" &&
+        args[0] === "push" &&
+        args.at(-1) === ":refs/heads/rivet/setup-test",
+    ),
+  );
+});
+
+test("discovers and closes a pull request accepted before create fails", async (t) => {
+  const { root } = await repository(t);
+  const calls = [];
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        pullRequestList: "exact",
+        fail: ({ command, args }) =>
+          command === "gh" && args[0] === "pr" && args[1] === "create"
+            ? "connection reset after create"
+            : null,
+      }),
+    }),
+    /connection reset after create/,
+  );
+  assert.ok(
+    calls.some(
+      ([command, args]) =>
+        command === "gh" && args[0] === "pr" && args[1] === "list",
+    ),
+  );
+  assert.ok(
+    calls.some(
+      ([command, args]) =>
+        command === "gh" && args[0] === "pr" && args[1] === "close",
+    ),
+  );
+});
+
+test("cleans up after an invalid pull-request URL and permits retry", async (t) => {
+  const { root, remote } = await repository(t);
+  const firstCalls = [];
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(firstCalls, { pullRequestUrl: "not-a-pull-request" }),
+    }),
+    /invalid pull-request URL/,
+  );
+  assert.equal(await git(root, ["branch", "--show-current"]), "main");
+  assert.equal(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+  assert.equal(
+    await git(remote, [
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/heads/rivet/setup-test",
+    ]),
+    "",
+  );
+
+  const result = await createReviewSetupPullRequest({
+    repositoryRoot: root,
+    branch: "rivet/setup-test",
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: async () => {},
+    run: runner([], {}),
+  });
+  assert.equal(result.branch, "rivet/setup-test");
+});
+
+test("cleans up after pull-request verification fails", async (t) => {
+  const { root, remote } = await repository(t);
+  const calls = [];
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        pullRequestView: {
+          baseRefName: "main",
+          headRefName: "rivet/setup-test",
+          headRefOid: "0".repeat(40),
+          isDraft: true,
+          state: "OPEN",
+          url: "https://github.com/acme/example/pull/17",
+        },
+      }),
+    }),
+    /setup pull request does not match the verified plan/,
+  );
+  assert.equal(await git(root, ["branch", "--show-current"]), "main");
+  assert.equal(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+  assert.equal(
+    await git(remote, [
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/heads/rivet/setup-test",
+    ]),
+    "",
+  );
+  assert.ok(
+    calls.some(
+      ([command, args]) =>
+        command === "gh" && args[0] === "pr" && args[1] === "view",
+    ),
+  );
+  assert.ok(
+    calls.some(
+      ([command, args]) =>
+        command === "gh" && args[0] === "pr" && args[1] === "close",
+    ),
+  );
+});
+
+test("restores a detached checkout after a pre-push failure", async (t) => {
+  const { root } = await repository(t);
+  const originalHead = await git(root, ["rev-parse", "HEAD"]);
+  await git(root, ["switch", "--detach", originalHead]);
+  const calls = [];
+  let failed = false;
+
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        fail: ({ command, args }) => {
+          if (
+            !failed &&
+            command === "git" &&
+            args[0] === "diff" &&
+            args[1] === "--cached" &&
+            args[2] === "--check"
+          ) {
+            failed = true;
+            return "staged diff check failed";
+          }
+          return null;
+        },
+      }),
+    }),
+    /staged diff check failed/,
+  );
+
+  assert.equal(await git(root, ["branch", "--show-current"]), "");
+  assert.equal(await git(root, ["rev-parse", "HEAD"]), originalHead);
+  assert.equal(await git(root, ["status", "--porcelain=v1"]), "");
+  assert.equal(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+});
+
+test("removes its local branch after a post-commit check fails", async (t) => {
+  const { root } = await repository(t);
+  const calls = [];
+  let failed = false;
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        fail: ({ command, args }) => {
+          if (
+            !failed &&
+            command === "git" &&
+            args[0] === "rev-parse" &&
+            args[1].endsWith("^")
+          ) {
+            failed = true;
+            return "parent check failed";
+          }
+          return null;
+        },
+      }),
+    }),
+    /parent check failed/,
+  );
+  assert.equal(await git(root, ["branch", "--show-current"]), "main");
+  assert.equal(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+  assert.equal(await git(root, ["status", "--porcelain=v1"]), "");
+});
+
+test("preserves an unverified local branch after commit identity lookup fails", async (t) => {
+  const { root } = await repository(t);
+  const calls = [];
+  let replaced = false;
+  let setupCommit = null;
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        fail: ({ command, args }) =>
+          command === "git" &&
+          args[0] === "rev-parse" &&
+          args[1] === "HEAD" &&
+          calls.some(
+            ([seenCommand, seenArgs]) =>
+              seenCommand === "git" && seenArgs[0] === "commit",
+          )
+            ? "commit identity unavailable"
+            : null,
+        beforeRun: async ({ command, args, cwd }) => {
+          if (
+            command === "git" &&
+            args[0] === "rev-parse" &&
+            args[1] === "HEAD" &&
+            calls.some(
+              ([seenCommand, seenArgs]) =>
+                seenCommand === "git" && seenArgs[0] === "commit",
+            )
+          ) {
+            setupCommit = await git(cwd, ["rev-parse", "HEAD"]);
+          }
+          if (
+            !replaced &&
+            command === "git" &&
+            args[0] === "for-each-ref" &&
+            args.at(-1) === "refs/heads/rivet/setup-test"
+          ) {
+            replaced = true;
+            const base = await git(cwd, ["rev-parse", "main"]);
+            const tree = await git(cwd, ["rev-parse", `${setupCommit}^{tree}`]);
+            const replacement = await git(cwd, [
+              "commit-tree",
+              tree,
+              "-p",
+              base,
+              "-m",
+              "Concurrent replacement",
+            ]);
+            await git(cwd, [
+              "update-ref",
+              "refs/heads/rivet/setup-test",
+              replacement,
+            ]);
+          }
+        },
+      }),
+    }),
+    /commit identity unavailable.*local setup branch rivet\/setup-test was not deleted/s,
+  );
+  assert.notEqual(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+});
+
+test("does not delete a setup branch that advanced remotely", async (t) => {
+  const { root, remote } = await repository(t);
+  const advanced = await git(root, ["rev-parse", "origin/main"]);
+  const calls = [];
+  let branchLookups = 0;
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        pullRequestView: {
+          baseRefName: "main",
+          headRefName: "rivet/setup-test",
+          headRefOid: "0".repeat(40),
+          isDraft: true,
+          state: "OPEN",
+          url: "https://github.com/acme/example/pull/17",
+        },
+        beforeRun: async ({ command, args }) => {
+          if (
+            command === "git" &&
+            args[0] === "ls-remote" &&
+            args.at(-1) === "refs/heads/rivet/setup-test"
+          ) {
+            branchLookups += 1;
+            if (branchLookups === 3) {
+              await git(remote, [
+                "update-ref",
+                "refs/heads/rivet/setup-test",
+                advanced,
+              ]);
+            }
+          }
+        },
+      }),
+    }),
+    /remote setup branch rivet\/setup-test was not deleted/,
+  );
+  assert.equal(
+    await git(remote, ["rev-parse", "refs/heads/rivet/setup-test"]),
+    advanced,
+  );
+  assert.equal(await git(root, ["branch", "--show-current"]), "main");
+  assert.equal(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+  assert.equal(
+    calls.filter(
+      ([command, args]) =>
+        command === "git" &&
+        args[0] === "push" &&
+        args.at(-1) === ":refs/heads/rivet/setup-test",
+    ).length,
+    0,
+  );
+});
+
+test("reports cleanup failure without hiding the setup error", async (t) => {
+  const { root, remote } = await repository(t);
+  const calls = [];
+  await assert.rejects(
+    createReviewSetupPullRequest({
+      repositoryRoot: root,
+      branch: "rivet/setup-test",
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: async () => {},
+      run: runner(calls, {
+        pullRequestView: {
+          baseRefName: "main",
+          headRefName: "rivet/setup-test",
+          headRefOid: "0".repeat(40),
+          isDraft: true,
+          state: "OPEN",
+          url: "https://github.com/acme/example/pull/17",
+        },
+        fail: ({ command, args }) =>
+          command === "git" &&
+          args[0] === "push" &&
+          args.at(-1) === ":refs/heads/rivet/setup-test"
+            ? "remote deletion denied"
+            : null,
+      }),
+    }),
+    (error) => {
+      assert.match(
+        error.message,
+        /setup pull request does not match the verified plan/,
+      );
+      assert.match(
+        error.message,
+        /could not clean up remote .*remote deletion denied/,
+      );
+      assert.equal(
+        error.cause?.message,
+        "Rivet installer: setup pull request does not match the verified plan",
+      );
+      return true;
+    },
+  );
+  assert.equal(await git(root, ["branch", "--show-current"]), "main");
+  assert.equal(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+  assert.notEqual(
+    await git(remote, [
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/heads/rivet/setup-test",
+    ]),
+    "",
   );
 });
 

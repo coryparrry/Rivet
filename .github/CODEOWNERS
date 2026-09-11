@@ -6,7 +6,6 @@
 /.github/ @coryparrry
 /packages/rivet/ @coryparrry
 /scripts/ @coryparrry
-/tools/codekeeper/ @coryparrry
 /MANIFEST.sha256 @coryparrry
 /SECURITY.md @coryparrry
 /LICENSE @coryparrry

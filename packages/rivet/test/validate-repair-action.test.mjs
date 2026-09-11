@@ -63,8 +63,28 @@ test("emits an exact-head receipt after isolated validation", async () => {
       ),
     writeFileImpl: async (filePath, content) => written.set(filePath, content),
     mkdirImpl: async () => {},
-    runImpl: async (command, args) => {
+    runImpl: async (command, args, options) => {
       calls.push([command, ...args]);
+      if (command === "docker") {
+        assert.equal(options.env.GITHUB_TOKEN, undefined);
+        assert.equal(
+          options.env.RIVET_VALIDATION_COMMANDS_BASE64,
+          Buffer.from(JSON.stringify(["npm test"])).toString("base64"),
+        );
+        assert.ok(args.includes("--rm"));
+        assert.ok(args.includes("--init"));
+        assert.ok(args.includes("--cap-drop=ALL"));
+        assert.ok(args.includes("--security-opt=no-new-privileges"));
+        assert.ok(
+          args.includes(
+            "node:22-bookworm@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
+          ),
+        );
+        assert.ok(args.includes("type=bind,source=/workspace,target=/workspace"));
+        assert.equal(args.at(-1), "npm test");
+        assert.equal(args.includes("/runner"), false);
+        assert.equal(args.includes("read-only-token"), false);
+      }
       if (args[0] === "diff" && args.includes("--name-only")) {
         return "src/discount.mjs\0";
       }
@@ -73,7 +93,7 @@ test("emits an exact-head receipt after isolated validation", async () => {
     },
   });
   assert.equal(
-    calls.some(([command, first]) => command === "/bin/sh" && first === "-c"),
+    calls.some(([command, first]) => command === "docker" && first === "run"),
     true,
   );
   assert.equal(receipt.headSha, headSha);

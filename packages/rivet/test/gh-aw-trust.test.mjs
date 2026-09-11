@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { inspectCompiledWorkflow } from "../src/gh-aw/inspect.mjs";
+import { DEFAULT_RIVET_CONFIG } from "../src/config.mjs";
 import {
   assessIssueTriageTrust,
   assessMaintenanceTrust,
@@ -13,10 +14,11 @@ import {
   RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256,
   RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256,
   RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE,
-  RIVET_REVIEW_AUTHORITY_SHA256_BY_ENGINE,
-  RIVET_REVIEW_DISABLED_AUTHORITY_SHA256_BY_ENGINE,
+  RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY,
 } from "../src/gh-aw/trust.mjs";
 import { RIVET_ISSUE_TRIAGE_PUBLISH_SCRIPT } from "../src/workflows/issue-triage.mjs";
+import { renderRivetReviewWorkflow } from "../src/workflows/review.mjs";
+import { currentReviewLock } from "./review-lock-fixtures.mjs";
 
 const PACKAGE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -515,6 +517,31 @@ test("accepts the self-contained base-branch Rivet review authority", async () =
   );
 });
 
+test("accepts every supported review publication policy", async () => {
+  for (const issueTriage of ["automatic", "disabled"])
+    for (const inlineFindings of [true, false])
+      for (const requestChanges of [false, true]) {
+        const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+        configuration.issues.triage = issueTriage;
+        configuration.review.inlineFindings = inlineFindings;
+        configuration.review.requestChanges = requestChanges;
+        const workflow = renderRivetReviewWorkflow({ configuration });
+        const authority = inspectCompiledWorkflow(
+          await currentReviewLock(PACKAGE_ROOT, workflow),
+        );
+        const trust = assessReview(authority, {
+          expectedIssueTriage: issueTriage,
+          expectedInlineFindings: inlineFindings,
+          expectedRequestChanges: requestChanges,
+        });
+        assert.equal(
+          trust.trusted,
+          true,
+          `${issueTriage}/${inlineFindings}/${requestChanges}: ${trust.violations.join("; ")}`,
+        );
+      }
+});
+
 test("trusts a genuinely compiled custom finding limit without widening authority", async () => {
   const source = gunzipSync(
     Buffer.from(
@@ -605,7 +632,9 @@ test("binds disabled issue triage to its exact review authority", async () => {
   const unknownMode = assessReview(authority, {
     expectedIssueTriage: "owner",
     expectedReviewAuthoritySha256:
-      RIVET_REVIEW_DISABLED_AUTHORITY_SHA256_BY_ENGINE.codex,
+      RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY[
+        "disabled:inline:comment:codex"
+      ],
   });
   assert.equal(unknownMode.trusted, false);
   assert.match(unknownMode.violations.join("; "), /issue triage mode/);
@@ -920,19 +949,14 @@ test("binds the complete review graph and execution controls", async () => {
 });
 
 test("pins a complete review inventory for every supported engine", () => {
-  for (const inventory of [
-    RIVET_REVIEW_AUTHORITY_SHA256_BY_ENGINE,
-    RIVET_REVIEW_DISABLED_AUTHORITY_SHA256_BY_ENGINE,
-  ]) {
-    assert.deepEqual(Object.keys(inventory), [
-      "claude",
-      "codex",
-      "copilot",
-      "gemini",
-    ]);
-    for (const digest of Object.values(inventory)) {
-      assert.match(digest, /^[0-9a-f]{64}$/);
-    }
+  assert.equal(
+    Object.keys(RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY).length,
+    32,
+  );
+  for (const digest of Object.values(
+    RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY,
+  )) {
+    assert.match(digest, /^[0-9a-f]{64}$/);
   }
 });
 

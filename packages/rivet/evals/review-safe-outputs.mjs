@@ -113,7 +113,7 @@ function includesEvidence(value, term) {
   let offset = -1;
   while ((offset = body.indexOf(expected, offset + 1)) >= 0) {
     if (!expected.trimEnd().endsWith(":")) return true;
-    const line = value.slice(offset + term.length).split(/\r?\n/u, 1)[0];
+    const line = body.slice(offset + expected.length).split(/\r?\n/u, 1)[0];
     if (line.trim()) return true;
   }
   return false;

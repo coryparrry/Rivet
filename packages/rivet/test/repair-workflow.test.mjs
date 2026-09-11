@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
+import { DEFAULT_RIVET_CONFIG } from "../src/config.mjs";
 import {
   renderRivetRepairWorkflow,
   renderRivetRepairWorkflowV012,
@@ -87,6 +89,21 @@ test("rejects missing or multiline validation commands", () => {
     () => renderRivetRepairWorkflow({ nativeImports: ["../fixer.md"] }),
     /must be a managed local Markdown path/,
   );
+});
+
+test("renders every configured non-endpoint repair provider", () => {
+  for (const [engine, model] of [
+    ["claude", "claude-sonnet-4-5"],
+    ["copilot", "gpt-5.6"],
+    ["gemini", "gemini-2.5-pro"],
+  ]) {
+    const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+    configuration.models.review = { engine, model, effort: "default" };
+    const source = renderRivetRepairWorkflow({ configuration });
+    const frontmatter = parse(source.match(/^---\n([\s\S]*?)\n---/)[1]);
+    assert.equal(frontmatter.engine, engine);
+    assert.equal(frontmatter.model, model);
+  }
 });
 
 test("freezes the 0.1.2 repair source used for upgrades", async () => {

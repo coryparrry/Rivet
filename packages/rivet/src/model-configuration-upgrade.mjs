@@ -13,6 +13,11 @@ function installedReviewShape(source) {
   const document = parseDocument(frontmatter[1], { uniqueKeys: true });
   if (document.errors.length) return null;
   const value = document.toJS({ maxAliasCount: 0 });
+  const safeOutputs = value["safe-outputs"];
+  const inline = safeOutputs?.["create-pull-request-review-comment"];
+  const allowedEvents = safeOutputs?.["submit-pull-request-review"]?.[
+    "allowed-events"
+  ];
   const model = {
     engine: typeof value.engine === "string" ? value.engine : value.engine?.id,
     model: value.model,
@@ -31,6 +36,14 @@ function installedReviewShape(source) {
   }
   return {
     model,
+    review: {
+      automatic: true,
+      inlineFindings: Boolean(inline),
+      requestChanges:
+        Array.isArray(allowedEvents) && allowedEvents.includes("REQUEST_CHANGES"),
+      maximumFindings: Number.isInteger(inline?.max) ? inline.max : null,
+    },
+    issueTriage: Boolean(safeOutputs?.["create-issue"]),
     includeAutoTagging: Boolean(value.jobs?.review_tags_pending),
     includeFailureSafePendingTags:
       value.jobs?.agent?.if === "needs.review_context.outputs.snapshot != ''",
@@ -54,18 +67,37 @@ export async function buildModelConfigurationBaseline({
 }) {
   const previous = installedReviewShape(previousSource);
   const previousModel = previous?.model;
+  if (!previousModel || !previous.review) return null;
+  let storedConfig = null;
+  try {
+    storedConfig = previousConfigurationContent
+      ? validateRivetConfig(JSON.parse(previousConfigurationContent))
+      : null;
+  } catch {
+    storedConfig = null;
+  }
+  const previousReview = {
+    ...previous.review,
+    maximumFindings:
+      previous.review.maximumFindings ??
+      storedConfig?.review.maximumFindings ??
+      options.config.review.maximumFindings,
+  };
+  const previousIssueTriage = previous.issueTriage ? "automatic" : "disabled";
   if (
-    !previousModel ||
-    isDeepStrictEqual(previousModel, options.config.models.review)
-  )
+    isDeepStrictEqual(previousModel, options.config.models.review) &&
+    isDeepStrictEqual(previousReview, options.config.review) &&
+    previousIssueTriage === options.config.issues.triage
+  ) {
     return null;
+  }
   let config;
   try {
-    config = previousConfigurationContent
-      ? validateRivetConfig(JSON.parse(previousConfigurationContent))
-      : structuredClone(options.config);
+    config = storedConfig ?? structuredClone(options.config);
     config = structuredClone(config);
     config.models.review = previousModel;
+    config.review = previousReview;
+    config.issues.triage = previousIssueTriage;
     validateRivetConfig(config);
   } catch {
     return null;

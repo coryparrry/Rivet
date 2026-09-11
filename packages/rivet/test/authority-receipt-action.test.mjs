@@ -16,9 +16,12 @@ const INPUTS = Object.freeze({
     "owner/repository/.github/workflows/rivet-review.lock.yml@refs/heads/main",
   workflowSha: "a".repeat(40),
 });
-const ACTION_ROOT = path.join(
+const PACKAGE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
+);
+const ACTION_ROOT = path.join(
+  PACKAGE_ROOT,
   "assets",
   "review",
   ".github",
@@ -28,9 +31,28 @@ const ACTION_ROOT = path.join(
 );
 
 test("declares one dependency-free Node action boundary", async () => {
-  const action = parse(
-    await readFile(path.join(ACTION_ROOT, "action.yml"), "utf8"),
-  );
+  const [actionSource, fixtureAction, implementation, fixtureImplementation] =
+    await Promise.all([
+      readFile(path.join(ACTION_ROOT, "action.yml"), "utf8"),
+      readFile(
+        path.join(
+          PACKAGE_ROOT,
+          "test/fixtures/review/.github/rivet/actions/authority-receipt/action.yml",
+        ),
+        "utf8",
+      ),
+      readFile(path.join(ACTION_ROOT, "index.mjs"), "utf8"),
+      readFile(
+        path.join(
+          PACKAGE_ROOT,
+          "test/fixtures/review/.github/rivet/actions/authority-receipt/index.mjs",
+        ),
+        "utf8",
+      ),
+    ]);
+  assert.equal(actionSource, fixtureAction);
+  assert.equal(implementation, fixtureImplementation);
+  const action = parse(actionSource);
   assert.deepEqual(Object.keys(action.inputs).sort(), [
     "compiler-version",
     "workflow-id",

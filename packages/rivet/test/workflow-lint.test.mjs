@@ -63,7 +63,7 @@ test("lint prepares all current stock and custom endpoint workflow fixtures", as
   );
   t.after(() => rm(directory, { recursive: true, force: true }));
   const outputs = await prepareWorkflowLint(directory);
-  assert.equal(outputs.length, 17);
+  assert.equal(outputs.length, 23);
   for (const output of outputs) {
     const document = parse(await readFile(output, "utf8"));
     assert.ok(document.jobs.agent, output);

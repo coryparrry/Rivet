@@ -24,6 +24,7 @@ import {
   renderRivetIssueTriageWorkflowV013Array,
 } from "../src/workflows/issue-triage.mjs";
 import { renderRivetMaintenanceWorkflow } from "../src/workflows/maintenance.mjs";
+import { renderRivetRepairWorkflow } from "../src/workflows/repair.mjs";
 import { renderRivetReviewWorkflow } from "../src/workflows/review.mjs";
 
 const PACKAGE_ROOT = path.resolve(
@@ -62,6 +63,18 @@ const ISSUE_TRIAGE_LOCK_PATH = path.join(
   ".github",
   "workflows",
   `${ISSUE_TRIAGE_WORKFLOW_ID}.lock.yml`,
+);
+const REPAIR_FIXTURE_ROOT = path.join(
+  PACKAGE_ROOT,
+  "test",
+  "fixtures",
+  "repair",
+);
+const REPAIR_WORKFLOW_ID = "rivet-repair";
+const REPAIR_LOCK_PATH = path.join(
+  ".github",
+  "workflows",
+  `${REPAIR_WORKFLOW_ID}.lock.yml`,
 );
 
 function fail(message) {
@@ -259,6 +272,81 @@ export async function checkMaintenanceLocks({
   }
 }
 
+export async function checkRepairLock({
+  write = false,
+  fixtureRoot = REPAIR_FIXTURE_ROOT,
+  temporaryParent = os.tmpdir(),
+  ensureBinary = ensureGhAwBinary,
+  compileWorkflow = compileGhAwWorkflow,
+  validateWorkflow = validateGhAwWorkflow,
+} = {}) {
+  const binaryPath = await ensureBinary();
+  const temporaryRoot = await realpath(
+    await mkdtemp(path.join(temporaryParent, "rivet-repair-lock-check-")),
+  );
+  try {
+    await cp(
+      path.join(PACKAGE_ROOT, "assets", "repair", ".github"),
+      path.join(temporaryRoot, ".github"),
+      { recursive: true },
+    );
+    await mkdir(path.join(temporaryRoot, ".github", "rivet", "agents"), {
+      recursive: true,
+    });
+    await cp(
+      path.join(PACKAGE_ROOT, "assets", "agents", "fixer.md"),
+      path.join(temporaryRoot, ".github", "rivet", "agents", "fixer.md"),
+    );
+    await mkdir(path.join(temporaryRoot, ".github", "workflows"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(temporaryRoot, ".github", "workflows", `${REPAIR_WORKFLOW_ID}.md`),
+      renderRivetRepairWorkflow(),
+    );
+    await compileWorkflow({
+      repositoryRoot: temporaryRoot,
+      workflowId: REPAIR_WORKFLOW_ID,
+      binaryPath,
+    });
+    await validateWorkflow({
+      repositoryRoot: temporaryRoot,
+      workflowId: REPAIR_WORKFLOW_ID,
+      binaryPath,
+    });
+    const fixturePath = path.join(
+      fixtureRoot,
+      `${REPAIR_WORKFLOW_ID}.lock.yml.gz.b64`,
+    );
+    const regenerated = await readFile(
+      path.join(temporaryRoot, REPAIR_LOCK_PATH),
+    );
+    if (write) {
+      await writeFile(
+        fixturePath,
+        `${gzipSync(regenerated).toString("base64")}\n`,
+      );
+    }
+    const checkedIn = gunzipSync(
+      Buffer.from(await readFile(fixturePath, "utf8"), "base64"),
+    );
+    if (
+      !checkedIn.equals(regenerated) &&
+      !knownCompilerDrift(
+        REPAIR_LOCK_PATH,
+        checkedIn.toString("utf8"),
+        regenerated.toString("utf8"),
+      )
+    ) {
+      fail(
+        `checked-in ${REPAIR_WORKFLOW_ID}.lock.yml fixture does not match the pinned gh-aw compiler output`,
+      );
+    }
+  } finally {
+    await rm(temporaryRoot, { force: true, recursive: true });
+  }
+}
+
 export async function checkReviewLock({
   write = false,
   fixtureRoot = FIXTURE_ROOT,
@@ -309,6 +397,40 @@ export async function checkReviewLock({
         ),
     },
   ];
+  for (const [name, triage, inlineFindings, requestChanges] of [
+    ["rivet-review-request-changes.lock.yml", "automatic", true, true],
+    ["rivet-review-summary.lock.yml", "automatic", false, false],
+    [
+      "rivet-review-summary-request-changes.lock.yml",
+      "automatic",
+      false,
+      true,
+    ],
+    ["rivet-review-disabled-request-changes.lock.yml", "disabled", true, true],
+    ["rivet-review-disabled-summary.lock.yml", "disabled", false, false],
+    [
+      "rivet-review-disabled-summary-request-changes.lock.yml",
+      "disabled",
+      false,
+      true,
+    ],
+  ]) {
+    const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+    configuration.issues.triage = triage;
+    configuration.review.inlineFindings = inlineFindings;
+    configuration.review.requestChanges = requestChanges;
+    variants.push({
+      name,
+      source: renderRivetReviewWorkflow({ configuration }),
+      readFixture: async () =>
+        gunzipSync(
+          Buffer.from(
+            await readFile(path.join(fixtureRoot, `${name}.gz.b64`), "utf8"),
+            "base64",
+          ),
+        ),
+    });
+  }
   const binaryPath = await ensureBinary();
   for (const variant of variants) {
     const temporaryRoot = await realpath(
@@ -373,5 +495,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   await checkReviewLock();
   await checkMaintenanceLocks();
   await checkIssueTriageLocks();
+  await checkRepairLock();
   process.stdout.write("Rivet workflow locks are current\n");
 }

@@ -112,6 +112,10 @@ async function repository(t) {
   return root;
 }
 
+async function frozenLock(relativePath) {
+  const encoded = await readFile(path.join(PACKAGE_ROOT, relativePath), "utf8");
+  return gunzipSync(Buffer.from(encoded, "base64")).toString("utf8");
+}
 async function frozenV012Lock(workflowId) {
   const encoded = await readFile(
     path.join(V012_FIXTURES, `${workflowId}.lock.yml.gz.b64`),
@@ -251,7 +255,9 @@ async function fixtureCompiler({ repositoryRoot, workflowId }) {
                     : await frozenV017ReviewLock(issueTriage)
                 : await frozenV013ReviewLock()
           : workflow.includes(FIXER_PATH)
-            ? "name: rivet-repair-current\n"
+            ? await frozenLock(
+                "test/fixtures/repair/rivet-repair.lock.yml.gz.b64",
+              )
             : await frozenV012Lock(workflowId);
   await writeFile(
     path.join(repositoryRoot, `.github/workflows/${workflowId}.lock.yml`),
