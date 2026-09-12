@@ -5,10 +5,6 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: npm
-    directory: /tools/codekeeper
-    schedule:
-      interval: weekly
-  - package-ecosystem: npm
     directory: /packages/rivet
     schedule:
       interval: weekly

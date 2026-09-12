@@ -411,7 +411,7 @@ test("fits one exact managed-source blob without evicting review memory", async 
   assert.ok(snapshotBytes <= 72 * 1024);
 });
 
-test("requires patches for changed files except source-backed locks", async () => {
+test("requires patches for changed files except zero-content renames", async () => {
   const incomplete = await createReviewContext({
     event: event(1),
     expectedRepository: "owner/repository",
@@ -438,7 +438,7 @@ test("requires patches for changed files except source-backed locks", async () =
     "GitHub comparison omits a complete changed-file patch",
   );
 
-  const complete = await createReviewContext({
+  const patchlessLock = await createReviewContext({
     event: event(2),
     expectedRepository: "owner/repository",
     token: "secret-token",
@@ -467,8 +467,60 @@ test("requires patches for changed files except source-backed locks", async () =
         { status: 200 },
       ),
   });
-  assert.equal(complete.complete, true);
-  assert.equal(complete.files[0].patch, null);
+  assert.equal(patchlessLock.complete, false);
+  assert.equal(
+    patchlessLock.reason,
+    "GitHub comparison omits a complete changed-file patch",
+  );
+
+  const completeLock = await createReviewContext({
+    event: event(1),
+    expectedRepository: "owner/repository",
+    token: "secret-token",
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify(
+          comparison([
+            {
+              filename: ".github/workflows/rivet-review.lock.yml",
+              status: "modified",
+              additions: 1,
+              deletions: 1,
+              changes: 2,
+              patch: "@@ -1 +1 @@\n-old\n+new",
+            },
+          ]),
+        ),
+        { status: 200 },
+      ),
+  });
+  assert.equal(completeLock.complete, true);
+  assert.equal(completeLock.files[0].patch, "@@ -1 +1 @@\n-old\n+new");
+
+  const zeroContentRename = await createReviewContext({
+    event: event(1),
+    expectedRepository: "owner/repository",
+    token: "secret-token",
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify(
+          comparison([
+            {
+              filename: "src/two.mjs",
+              previous_filename: "src/old-two.mjs",
+              status: "renamed",
+              additions: 0,
+              deletions: 0,
+              changes: 0,
+              patch: null,
+            },
+          ]),
+        ),
+        { status: 200 },
+      ),
+  });
+  assert.equal(zeroContentRename.complete, true);
+  assert.equal(zeroContentRename.files[0].patch, null);
 });
 
 test("uses the trusted GitHub Enterprise API origin", async () => {

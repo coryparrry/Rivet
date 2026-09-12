@@ -24,7 +24,7 @@ jobs:
       - id: review-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: ${{ vars.RIVET_APP_CLIENT_ID }}
+          client-id: ${{ vars.RIVET_APP_CLIENT_ID }}
           private-key: ${{ secrets.RIVET_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
@@ -159,7 +159,7 @@ safe-outputs:
         - id: review-token
           uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
           with:
-            app-id: ${{ vars.RIVET_APP_CLIENT_ID }}
+            client-id: ${{ vars.RIVET_APP_CLIENT_ID }}
             private-key: ${{ secrets.RIVET_APP_PRIVATE_KEY }}
             owner: ${{ github.repository_owner }}
             repositories: ${{ github.event.repository.name }}

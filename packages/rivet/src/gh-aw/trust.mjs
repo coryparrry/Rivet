@@ -1,5 +1,19 @@
-import { createHash } from "node:crypto";
-import { DEFAULT_RIVET_CONFIG } from "../config.mjs";
+import {
+  hasExactlyKeys,
+  issueTriageAuthorityDigest,
+  maintenanceAuthorityDigests,
+  repairAuthorityDigest,
+  reviewAuthorityDigest,
+  reviewInlineLimit,
+  sameValues,
+} from "./authority-inventory.mjs";
+
+export {
+  issueTriageAuthorityDigest,
+  maintenanceAuthorityDigests,
+  repairAuthorityDigest,
+  reviewAuthorityDigest,
+} from "./authority-inventory.mjs";
 
 const MAINTENANCE_SHARED_SECRETS = [
   "COPILOT_GITHUB_TOKEN",
@@ -22,17 +36,39 @@ export const RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256 =
   "dcb9f93ac56879b15276b6cb780245b284ea25590ee5e299f7174063a80c3291";
 export const RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256 =
   "74b5d1f0163c93c16b6a7a44aee902ba4f529433bdc0a08748cfad74184771dc";
-export const RIVET_REVIEW_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
-  claude: "7280c2bd98016857bb6629586cf40d43dfb7818b8f60aa6b452085e62801c089",
-  codex: "203de54388dbd3ea637932c87a12dbea8df53dc97a95b1898626d2fe7f126b91",
-  copilot: "86769dcfe232ae25590f0601606bf531e889b14cb42c1588db215c6eed57bda8",
-  gemini: "a375ee66efe0a1f7b7eff51e023b07853d8599c73f876538cdad63815527c3d1",
-});
-export const RIVET_REVIEW_DISABLED_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
-  claude: "c83c29dd2d4533102a024f07db0dc5a41ce3c11d02cd672f9cdf1f40a0a204e3",
-  codex: "21026591246428e5f5b9eac8a04057c73901569560d252404f67ae7e967288fb",
-  copilot: "b02876f648bf8a3498ccfb7bf13db146f4e18c58756ad211e191dd3dccf9601c",
-  gemini: "32d497f55becc5409d1987a72806fdc2ec03c9d9dfdf9ef66dc85124593974bd",
+export const RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY = Object.freeze({
+  "automatic:inline:comment:claude": "7cc743b25c7c0cdf43ade70e2149022936e2b4ebb1b77661250dcc1a3443967c",
+  "automatic:inline:comment:codex": "b1bc2f7bda95db2bf6097785f2a1c92f3c6652d04493934b56ad9f9e2a8d8a30",
+  "automatic:inline:comment:copilot": "1e110874f79c4f371920a52d40f8dae109d0f40f1acf6e458d06bb4f0a7bcce8",
+  "automatic:inline:comment:gemini": "97706bc2e8c88b6dee1e2f2eab2c28459d5edcc97d7493baf53a0cfaffc6ce35",
+  "automatic:inline:request-changes:claude": "6a125fe56ff8035321f0507e405462be4673879c50b2222d7fcaac1b3318c2c0",
+  "automatic:inline:request-changes:codex": "4422e4a688ede8c0b2691d03ac2ecf744c9c0215089c44eb927f5a2f5ce2b6b6",
+  "automatic:inline:request-changes:copilot": "5b447c3bf391b83663831898bc4e1551a8c62b4aa21a2baec54295192ea98efa",
+  "automatic:inline:request-changes:gemini": "79b1229b684f6b626c1e66de3eb4d7e197ab15da39c661e36079d4cdb4d43578",
+  "automatic:summary:comment:claude": "aebb4a08fa91ab035c32d1e80e0b893ebc678c04982ea3640ed8be2dde9b401e",
+  "automatic:summary:comment:codex": "16b9a892730f9639ff5ec3634c7f7922264b232c9a26f7e1ac4550048d2fae2d",
+  "automatic:summary:comment:copilot": "d517db18999f03c1670c9e46792422438fb97245824df989f67468fe30812e8b",
+  "automatic:summary:comment:gemini": "41972c22110d520b2ecce5bfc7a317b23f9bac4107e0ca29286d952a51e12e27",
+  "automatic:summary:request-changes:claude": "b92e6f9c513fd0c0ca4b51bf51062698a43abb39d2341c7bd32c02ffaff433dd",
+  "automatic:summary:request-changes:codex": "99bf29e6d40293eca9d5a6fd2d4e024deb27d966db1babce823fe021fed3a3ed",
+  "automatic:summary:request-changes:copilot": "6ff2a3e9540978c718bf5af3dbad437d58f9478d60636d01281435be272e52e3",
+  "automatic:summary:request-changes:gemini": "e6079c7bf6b0370105f4d3aa5f6e336e40b9995f721676d1204bc98f245c07da",
+  "disabled:inline:comment:claude": "f22e77599124bae180b6b5f9a99ad1a131c077c9955835ddfc4d4feeb097aeb3",
+  "disabled:inline:comment:codex": "1dc30f02c0ea69e04eb4969e8f61ab658b94d794ff35c2ae36dd566289e4b963",
+  "disabled:inline:comment:copilot": "9e1a8ddcc587deeaddcf9c376b78a462cb23b42e67317982fa20dd9a303cc7fa",
+  "disabled:inline:comment:gemini": "fa82a186f35f9cbc3e1d6afe475470f8affec3e2e949e121237fd032098d68c9",
+  "disabled:inline:request-changes:claude": "0ca2cc56137875929186c2deee01fa1e247555399814c7e99184eb22db1e189a",
+  "disabled:inline:request-changes:codex": "923d32f878da7052d5f4e52c1a9791a54d98fe1c65bdb36eebb2ff6895d257ec",
+  "disabled:inline:request-changes:copilot": "a34cb2c8dc7fc4165a4b99f3a4ac7c548226af2422f3ff39808bd5987cd96ed4",
+  "disabled:inline:request-changes:gemini": "1a6fbd37936f6333593182b02da36ef51396012eb5544015c0c1d58ba663255f",
+  "disabled:summary:comment:claude": "dc59b76a32dffa4aaae0cba6fa9bf923b26c56c0a82412540ebda0733b8a36f6",
+  "disabled:summary:comment:codex": "b2ed457ad38f56728c75fb9f5f5311a36434e1b20310068465bbf26209fd4006",
+  "disabled:summary:comment:copilot": "892a52a7a25ea11f70429772e1e3523eeddbbcbb3d22a1017e4e4d6717bbdf7f",
+  "disabled:summary:comment:gemini": "abfff3bab0030b9c1cee1eb4285119f75098027a42ed682b980014e01626bcfe",
+  "disabled:summary:request-changes:claude": "c28b6222bbf4015f79daac593ab2200c93a2fa90432da0895b24e1808613e926",
+  "disabled:summary:request-changes:codex": "676a53207523740b0094031ca5374c87bffae966968e3c0614cc439f6387edbf",
+  "disabled:summary:request-changes:copilot": "77412932374371d032647656755525bfb610ef330402199ca78d71d7fc72e5f3",
+  "disabled:summary:request-changes:gemini": "4271c5a22d2e6863f95c69a3c53354c2be41d56def3af2a6d3b00c313c28b3cd",
 });
 export const RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
   claude: "f1ac491b665080316eb9ae1c0b9762b58d39e416c09677dd28a6e54d5ccf5ea4",
@@ -40,275 +76,12 @@ export const RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
   copilot: "ee0dc306c0fbf944d077f1637edee60d1fe30d989db0a75da961d23aa4015ffb",
   gemini: "4a55ecdcb1d007d048e7816d1209c91bbc20fe4e1358fe6b77484454fa813238",
 });
-
-function sameValues(left, right) {
-  return (
-    Array.isArray(left) &&
-    Array.isArray(right) &&
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
-}
-
-function hasExactlyKeys(value, keys) {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === keys.length &&
-    keys.every((key) => Object.hasOwn(value, key))
-  );
-}
-
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort()
-      .map((key) => [key, canonicalize(value[key])]),
-  );
-}
-
-function digest(value) {
-  return createHash("sha256")
-    .update(JSON.stringify(canonicalize(value)))
-    .digest("hex");
-}
-
-function maintenanceEnvironment(env, authority) {
-  const modelKeys = new Set([
-    "GH_AW_INFO_MODEL",
-    "GH_AW_ENGINE_MODEL",
-    "GH_AW_MODEL_AGENT_CODEX",
-    "GH_AW_MODEL_DETECTION_CODEX",
-  ]);
-  return Object.fromEntries(
-    Object.entries(env ?? {}).map(([key, value]) => [
-      key,
-      modelKeys.has(key)
-        ? value === authority.metadata?.agent_model
-          ? DEFAULT_RIVET_CONFIG.models.review.model
-          : null
-        : value,
-    ]),
-  );
-}
-
-function maintenanceActionInventory(authority) {
-  return {
-    actions: (authority.actions ?? []).map(
-      ({ env, if: condition, job, uses, with: actionWith }) => ({
-        env: maintenanceEnvironment(env, authority),
-        if: condition ?? null,
-        job,
-        uses,
-        with: actionWith ?? {},
-      }),
-    ),
-    scripts: (authority.scripts ?? []).map(
-      ({ env, if: condition, job, name, run, shell }) => ({
-        job,
-        name,
-        if: condition,
-        run,
-        shell,
-        env: maintenanceEnvironment(env, authority),
-      }),
-    ),
-  };
-}
-
-function maintenanceJobAuthorityInventory(authority) {
-  return {
-    jobs: Object.fromEntries(
-      Object.entries(authority.jobAuthority ?? {}).map(
-        ([
-          job,
-          { container, env, environment, permissions, runsOn, services },
-        ]) => [
-          job,
-          {
-            container,
-            env: maintenanceEnvironment(env, authority),
-            environment,
-            permissions,
-            runsOn,
-            services,
-          },
-        ],
-      ),
-    ),
-    workflowEnv: maintenanceEnvironment(authority.workflowEnv, authority),
-  };
-}
-
-function normalizedSafeOutputConfig(config) {
-  if (!config) return "";
-  const normalized = structuredClone(config);
-  normalized.create_issue = "<ISSUE_TRIAGE>";
-  normalized.create_pull_request_review_comment = "<INLINE_FINDINGS>";
-  if (normalized.submit_pull_request_review) {
-    normalized.submit_pull_request_review.allowed_events = "<REVIEW_EVENTS>";
-  }
-  return JSON.stringify(normalized);
-}
-
-function reviewInlineLimit(authority) {
-  const maximum =
-    authority.safeOutputConfig?.create_pull_request_review_comment?.max;
-  return Number.isInteger(maximum) && maximum >= 1 && maximum <= 20
-    ? maximum
-    : null;
-}
-
-function normalizeReviewText(name, value, authority) {
-  const maximum = reviewInlineLimit(authority);
-  if (maximum === null || typeof value !== "string") return value;
-  if (name.startsWith("GH_AW_PROMPT_CONTENT_")) {
-    return value
-      .replaceAll(
-        `create_pull_request_review_comment(max:${maximum})`,
-        "create_pull_request_review_comment(max:8)",
-      )
-      .replaceAll(
-        `Publish no more than ${maximum} inline findings.`,
-        "Publish no more than 8 inline findings.",
-      );
-  }
-  if (name === "GH_AW_TOOLS_META_JSON") {
-    return value.replaceAll(
-      `Maximum ${maximum} review comment(s) can be created.`,
-      "Maximum 8 review comment(s) can be created.",
-    );
-  }
-  return value;
-}
-
-function normalizeReviewScript(run, authority) {
-  const maximum = reviewInlineLimit(authority);
-  if (maximum === null || typeof run !== "string") return run;
-  return run.replace(
-    /'(GH_AW_SAFE_OUTPUTS_CONFIG_[0-9a-f]{16}_EOF)'\n([^\n]+)\n\1\n/g,
-    (original, delimiter, source) => {
-      let config;
-      try {
-        config = JSON.parse(source);
-      } catch {
-        return original;
-      }
-      if (config?.create_pull_request_review_comment?.max !== maximum)
-        return original;
-      config.create_pull_request_review_comment.max = 8;
-      return `'GH_AW_SAFE_OUTPUTS_CONFIG_NORMALIZED_EOF'\n${JSON.stringify(config)}\nGH_AW_SAFE_OUTPUTS_CONFIG_NORMALIZED_EOF\n`;
-    },
-  );
-}
-
-function normalizeReviewEnv(env, authority) {
-  const model = authority.metadata?.agent_model;
-  const config = authority.safeOutputConfig
-    ? JSON.stringify(authority.safeOutputConfig)
-    : "";
-  return Object.fromEntries(
-    Object.entries(env ?? {}).map(([name, value]) => [
-      name,
-      value === model
-        ? "<MODEL>"
-        : name === "GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG" && value === config
-          ? normalizedSafeOutputConfig(authority.safeOutputConfig)
-          : normalizeReviewText(name, value, authority),
-    ]),
-  );
-}
-
-function reviewAuthorityInventory(authority) {
-  const publicationJobs = new Set(["conclusion", "safe_outputs"]);
-  const actions = (authority.actions ?? []).map((originalAction) => {
-    const action = {
-      ...originalAction,
-      env: normalizeReviewEnv(originalAction.env, authority),
-    };
-    return publicationJobs.has(action.job) &&
-      action.action === "actions/create-github-app-token"
-      ? {
-          ...action,
-          with: {
-            ...action.with,
-            "permission-issues": "<ISSUES_PERMISSION>",
-          },
-        }
-      : action;
-  });
-  const jobAuthority = Object.fromEntries(
-    Object.entries(authority.jobAuthority ?? {}).map(([job, value]) => {
-      const normalizedValue = value
-        ? { ...value, env: normalizeReviewEnv(value.env, authority) }
-        : value;
-      return [
-        job,
-        normalizedValue && publicationJobs.has(job)
-          ? {
-              ...normalizedValue,
-              permissions: {
-                ...normalizedValue.permissions,
-                issues: "<ISSUES_PERMISSION>",
-              },
-            }
-          : normalizedValue,
-      ];
-    }),
-  );
-  return {
-    actions,
-    containers: authority.containers ?? [],
-    jobAuthority,
-    jobConditions: authority.jobConditions ?? {},
-    jobIds: Object.keys(authority.jobAuthority ?? {}).sort(),
-    permissions: authority.permissions ?? {},
-    scripts: (authority.scripts ?? []).map((script) => ({
-      ...script,
-      run: normalizeReviewScript(script.run, authority),
-      env: normalizeReviewEnv(script.env, authority),
-    })),
-    triggerConfig: authority.triggerConfig ?? {},
-    workflowConcurrency: authority.concurrency ?? null,
-    workflowDefaults: authority.workflowDefaults ?? null,
-    workflowEnv: normalizeReviewEnv(authority.workflowEnv, authority),
-  };
-}
-
-export function reviewAuthorityDigest(authority) {
-  return digest(reviewAuthorityInventory(authority));
-}
-
-function issueTriageAuthorityInventory(authority) {
-  const normalize = (value) => normalizeReviewEnv(value, authority);
-  return {
-    actions: (authority.actions ?? []).map((action) => ({
-      ...action,
-      env: normalize(action.env),
-    })),
-    containers: authority.containers ?? [],
-    jobAuthority: Object.fromEntries(
-      Object.entries(authority.jobAuthority ?? {}).map(([job, value]) => [
-        job,
-        value ? { ...value, env: normalize(value.env) } : value,
-      ]),
-    ),
-    jobConditions: authority.jobConditions ?? {},
-    jobIds: Object.keys(authority.jobAuthority ?? {}).sort(),
-    permissions: authority.permissions ?? {},
-    scripts: (authority.scripts ?? []).map((script) => ({
-      ...script,
-      env: normalize(script.env),
-    })),
-    triggerConfig: authority.triggerConfig ?? {},
-    workflowConcurrency: authority.concurrency ?? null,
-    workflowDefaults: authority.workflowDefaults ?? null,
-    workflowEnv: normalize(authority.workflowEnv),
-  };
-}
+export const RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
+  claude: "87870bfbc174c9dadba231ec7d8f28424f9eba2211ee2c08d4794ac968f66e4e",
+  codex: "31244559a157bedda15629c421d63da758b54406a3e4d249383334dd8509d5d8",
+  copilot: "57949b260868ff68be64885aaabb3b4f79e0720bc124b70f92427af30a5a8eaa",
+  gemini: "6fae4c1bcb0dda44482295d7113e0e6d47198fc02d62d6a29f3b7bed7ef22613",
+});
 
 function reviewWriteAuthorityIsNarrow(authority) {
   const writeJobs = authority.writeCapableJobs ?? [];
@@ -353,7 +126,12 @@ function reviewWriteAuthorityIsNarrow(authority) {
   );
 }
 
-function reviewSafeOutputsAreBounded(authority, expectedIssueTriage) {
+function reviewSafeOutputsAreBounded(
+  authority,
+  expectedIssueTriage,
+  expectedInlineFindings,
+  expectedRequestChanges,
+) {
   const config = authority.safeOutputConfig;
   if (!config || typeof config !== "object" || Array.isArray(config))
     return false;
@@ -378,6 +156,7 @@ function reviewSafeOutputsAreBounded(authority, expectedIssueTriage) {
   );
   return (
     Boolean(issue) === (expectedIssueTriage === "automatic") &&
+    Boolean(inline) === expectedInlineFindings &&
     sameValues(authority.safeOutputJobs, ["safe_outputs"]) &&
     appTokens.length === 2 &&
     appTokens.every(
@@ -402,8 +181,10 @@ function reviewSafeOutputsAreBounded(authority, expectedIssueTriage) {
         issue.title_prefix === "[rivet] ")) &&
     hasExactlyKeys(review, ["allowed_events", "max"]) &&
     review.max === 1 &&
-    (sameValues(review.allowed_events, ["COMMENT"]) ||
-      sameValues(review.allowed_events, ["COMMENT", "REQUEST_CHANGES"])) &&
+    sameValues(
+      review.allowed_events,
+      expectedRequestChanges ? ["COMMENT", "REQUEST_CHANGES"] : ["COMMENT"],
+    ) &&
     config.noop?.max === 1 &&
     config.noop?.["report-as-issue"] === "false" &&
     authority.safeOutputSettings?.failureReportAsIssue === "false" &&
@@ -411,6 +192,47 @@ function reviewSafeOutputsAreBounded(authority, expectedIssueTriage) {
     authority.safeOutputSettings?.missingToolReportAsFailure === "true" &&
     authority.safeOutputSettings?.noopReportAsIssue === "false" &&
     authority.safeOutputSettings?.reportIncompleteCreateIssue === "false"
+  );
+}
+
+function issueTriageSafeOutputsAreBounded(authority) {
+  const config = authority.safeOutputConfig;
+  const settings = authority.safeOutputSettings;
+  if (
+    !config ||
+    typeof config !== "object" ||
+    Array.isArray(config) ||
+    !settings ||
+    typeof settings !== "object" ||
+    Array.isArray(settings)
+  ) {
+    return false;
+  }
+  return (
+    hasExactlyKeys(config, [
+      "missing_data",
+      "missing_tool",
+      "noop",
+      "report_incomplete",
+    ]) &&
+    hasExactlyKeys(config.missing_data, []) &&
+    hasExactlyKeys(config.missing_tool, []) &&
+    hasExactlyKeys(config.report_incomplete, []) &&
+    hasExactlyKeys(config.noop, ["max", "report-as-issue"]) &&
+    config.noop.max === 1 &&
+    config.noop["report-as-issue"] === "false" &&
+    hasExactlyKeys(settings, [
+      "failureReportAsIssue",
+      "missingDataReportAsFailure",
+      "missingToolReportAsFailure",
+      "noopReportAsIssue",
+      "reportIncompleteCreateIssue",
+    ]) &&
+    settings.failureReportAsIssue === "false" &&
+    settings.missingDataReportAsFailure === "true" &&
+    settings.missingToolReportAsFailure === "true" &&
+    settings.noopReportAsIssue === "false" &&
+    settings.reportIncompleteCreateIssue === "false"
   );
 }
 
@@ -527,15 +349,16 @@ export function assessMaintenanceTrust({
       "only conclusion may use workflow write authority for cancellation",
     );
   }
+  const maintenanceDigests = maintenanceAuthorityDigests(authority);
   if (
     !expectedActionsSha256 ||
-    digest(maintenanceActionInventory(authority)) !== expectedActionsSha256
+    maintenanceDigests.actions !== expectedActionsSha256
   ) {
     violations.push("maintenance actions differ from the approved inventory");
   }
   if (
     !expectedJobConditionsSha256 ||
-    digest(authority.jobConditions ?? {}) !== expectedJobConditionsSha256
+    maintenanceDigests.jobConditions !== expectedJobConditionsSha256
   ) {
     violations.push(
       "maintenance job conditions differ from the approved inventory",
@@ -543,8 +366,7 @@ export function assessMaintenanceTrust({
   }
   if (
     !expectedJobAuthoritySha256 ||
-    digest(maintenanceJobAuthorityInventory(authority)) !==
-      expectedJobAuthoritySha256
+    maintenanceDigests.jobAuthority !== expectedJobAuthoritySha256
   ) {
     violations.push(
       "maintenance runner, container, permissions, environment, or services differ from the approved inventory",
@@ -622,7 +444,7 @@ export function assessIssueTriageTrust({
     RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE[expectedEngine];
   if (
     !authoritySha256 ||
-    digest(issueTriageAuthorityInventory(authority)) !== authoritySha256
+    issueTriageAuthorityDigest(authority) !== authoritySha256
   ) {
     violations.push(
       "issue triage workflow differs from the approved authority inventory",
@@ -692,9 +514,126 @@ export function assessIssueTriageTrust({
   if (!sameValues(authority.safeOutputJobs, ["safe_outputs"])) {
     violations.push("issue triage must use only the safe_outputs publisher");
   }
+  if (!issueTriageSafeOutputsAreBounded(authority)) {
+    violations.push(
+      "issue triage safe outputs differ from the approved handler set and settings",
+    );
+  }
   return Object.freeze({
     trusted: violations.length === 0,
     baseContext: "issues event default branch",
+    violations: Object.freeze(violations),
+  });
+}
+
+function repairWriteJobsOnly(writeCapableJobs) {
+  return (
+    writeCapableJobs.length === 2 &&
+    writeCapableJobs[0].job === "activation" &&
+    JSON.stringify(writeCapableJobs[0].permissions) ===
+      JSON.stringify({
+        actions: "read",
+        contents: "read",
+        issues: "write",
+        "pull-requests": "write",
+      }) &&
+    writeCapableJobs[1].job === "conclusion" &&
+    JSON.stringify(writeCapableJobs[1].permissions) ===
+      JSON.stringify({ actions: "write" })
+  );
+}
+
+export function assessRepairTrust({
+  authority,
+  expectedEngine,
+  expectedImports = [],
+  expectedLocalActions = [],
+  expectedModel,
+  expectedValidationCommands = ["npm test"],
+  expectedSecrets,
+  expectedAuthoritySha256,
+}) {
+  const violations = [];
+  if (!sameValues(authority.triggers, ["issue_comment"])) {
+    violations.push("repair workflow must use only issue_comment");
+  }
+  if (authority.metadata.strict !== true) {
+    violations.push("compiler strict mode is required");
+  }
+  if (
+    authority.metadata.agent_id !== expectedEngine ||
+    authority.metadata.agent_model !== expectedModel
+  ) {
+    violations.push("repair model differs from the configured model");
+  }
+  const authoritySha256 =
+    expectedAuthoritySha256 ??
+    RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE[expectedEngine];
+  if (
+    !authoritySha256 ||
+    repairAuthorityDigest(authority, expectedValidationCommands) !==
+      authoritySha256
+  ) {
+    violations.push("repair workflow differs from the approved authority inventory");
+  }
+  if (!authority.inlinedImports) {
+    violations.push("repair workflow and native imports must be inlined");
+  }
+  if (!sameValues(authority.resolvedImports, expectedImports)) {
+    violations.push("repair native imports differ from the approved inventory");
+  }
+  if (authority.runtimeImports.length > 0) {
+    violations.push("runtime prompt imports are not allowed");
+  }
+  if (authority.unpinnedActions.length > 0) {
+    violations.push("all actions must use immutable commit pins");
+  }
+  if (authority.unpinnedContainers.length > 0) {
+    violations.push("all containers must use immutable digest pins");
+  }
+  if (!sameValues(authority.localActions, expectedLocalActions)) {
+    violations.push("repair local actions differ from the approved inventory");
+  }
+  const approvedSecrets = expectedSecrets ?? issueTriageSecrets(expectedEngine);
+  if (
+    !approvedSecrets ||
+    !sameValues(authority.secrets, approvedSecrets) ||
+    !sameValues(authority.manifestSecrets, approvedSecrets)
+  ) {
+    violations.push("repair secrets differ from the approved inventory");
+  }
+  if (JSON.stringify(authority.permissions) !== JSON.stringify({})) {
+    violations.push("repair root permissions must remain empty");
+  }
+  if (authority.additionalRepositories.length > 0) {
+    violations.push("additional repository checkouts are not allowed");
+  }
+  if (
+    authority.checkouts.length === 0 ||
+    authority.checkouts.some(
+      ({ repository, ref, path, persistCredentials }) =>
+        repository !== null ||
+        ref !== null ||
+        path !== null ||
+        persistCredentials !== false,
+    )
+  ) {
+    violations.push("repair checkouts must not persist credentials");
+  }
+  if (!repairWriteJobsOnly(authority.writeCapableJobs)) {
+    violations.push("repair write authority differs from the approved inventory");
+  }
+  if (!sameValues(authority.safeOutputJobs, ["safe_outputs"])) {
+    violations.push("repair must use only the safe_outputs publisher");
+  }
+  if (!issueTriageSafeOutputsAreBounded(authority)) {
+    violations.push(
+      "repair safe outputs differ from the approved handler set and settings",
+    );
+  }
+  return Object.freeze({
+    trusted: violations.length === 0,
+    baseContext: "owner-authorized pull request repair",
     violations: Object.freeze(violations),
   });
 }
@@ -706,7 +645,9 @@ export function assessPullRequestTargetTrust({
   expectedLocalActions = [],
   expectedModel,
   expectedIssueTriage = "automatic",
+  expectedInlineFindings = true,
   expectedMaximumFindings = 8,
+  expectedRequestChanges = false,
   expectedReviewAuthoritySha256,
 }) {
   const violations = [];
@@ -751,16 +692,24 @@ export function assessPullRequestTargetTrust({
   }
   const reviewAuthoritySha256 =
     expectedReviewAuthoritySha256 ??
-    (expectedIssueTriage === "automatic"
-      ? RIVET_REVIEW_AUTHORITY_SHA256_BY_ENGINE[expectedEngine]
-      : expectedIssueTriage === "disabled"
-        ? RIVET_REVIEW_DISABLED_AUTHORITY_SHA256_BY_ENGINE[expectedEngine]
-        : undefined);
+    RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY[
+      [
+        expectedIssueTriage,
+        expectedInlineFindings ? "inline" : "summary",
+        expectedRequestChanges ? "request-changes" : "comment",
+        expectedEngine,
+      ].join(":")
+    ];
   if (
     !reviewAuthoritySha256 ||
     reviewAuthorityDigest(authority) !== reviewAuthoritySha256 ||
     !reviewWriteAuthorityIsNarrow(authority) ||
-    !reviewSafeOutputsAreBounded(authority, expectedIssueTriage) ||
+    !reviewSafeOutputsAreBounded(
+      authority,
+      expectedIssueTriage,
+      expectedInlineFindings,
+      expectedRequestChanges,
+    ) ||
     (authority.safeOutputConfig?.create_pull_request_review_comment &&
       reviewInlineLimit(authority) !== expectedMaximumFindings)
   ) {

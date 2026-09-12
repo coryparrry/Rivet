@@ -4,7 +4,7 @@
 # These workflows also embed literal JavaScript and template syntax in
 # single-quoted shell strings; ShellCheck SC2016 is intentional at those sites.
 paths:
-  .github/workflows/codekeeper-*.yml:
+  .github/workflows/rivet-*.yml:
     ignore:
       - 'property "workflow_repository" is not defined'
       - 'property "workflow_sha" is not defined'

@@ -7,6 +7,10 @@ const PRE_PENDING_TAG_ISOLATION_EXTENSION = new URL(
   "../assets/upgrades/pre-pending-tag-isolation/review-extension.md",
   import.meta.url,
 );
+export const PRE_REVIEW_STATUS_EXTENSION = new URL(
+  "../assets/upgrades/pre-review-status/review-extension.md",
+  import.meta.url,
+);
 
 export async function buildTaggingUpgradeBaselines({
   stagingRoot,
@@ -32,6 +36,7 @@ export async function buildTaggingUpgradeBaselines({
       includeAutoTagging,
       includeFailureSafePendingTags: false,
       includePendingTagOutput: false,
+      useClientIdInput: false,
       reviewExtension,
     });
     baselines.push(completeInstallationFiles(files, options));
@@ -43,7 +48,19 @@ export async function buildTaggingUpgradeBaselines({
     includeIssueTriage: options.config.issues.triage === "automatic",
     includeMaintenance: options.config.maintenance.mode !== "disabled",
     includePendingTagOutput: false,
+    useClientIdInput: false,
+    reviewExtension: await readFile(PRE_REVIEW_STATUS_EXTENSION, "utf8"),
   });
   baselines.push(completeInstallationFiles(beforeOutput, options));
+  const beforeStatus = await buildWorkflowFiles({
+    ...options,
+    stagingRoot: path.join(stagingRoot, "before-review-status"),
+    profiles: true,
+    includeIssueTriage: options.config.issues.triage === "automatic",
+    includeMaintenance: options.config.maintenance.mode !== "disabled",
+    useClientIdInput: false,
+    reviewExtension: await readFile(PRE_REVIEW_STATUS_EXTENSION, "utf8"),
+  });
+  baselines.push(completeInstallationFiles(beforeStatus, options));
   return baselines;
 }

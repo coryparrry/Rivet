@@ -31,10 +31,7 @@ export function renderRivetRepairWorkflow({
 } = {}) {
   const commands = validationCommands(validation);
   const encodedCommands = encodedValidationCommands(validation);
-  const configuredModel = validateRivetConfig(configuration).models.review;
-  const model = configuredModel.endpoint
-    ? configuredModel
-    : DEFAULT_RIVET_CONFIG.models.review;
+  const model = validateRivetConfig(configuration).models.review;
   return `---
 name: Rivet pull request repair
 on:

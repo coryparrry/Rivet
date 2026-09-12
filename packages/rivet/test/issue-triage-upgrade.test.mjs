@@ -35,6 +35,19 @@ async function fixtureCompiler({ repositoryRoot, workflowId }) {
   let source;
   if (workflowId === "rivet-review") {
     source = await currentReviewLock(PACKAGE_ROOT, workflow);
+  } else if (workflowId === "rivet-repair") {
+    source = gunzipSync(
+      Buffer.from(
+        await readFile(
+          path.join(
+            PACKAGE_ROOT,
+            "test/fixtures/repair/rivet-repair.lock.yml.gz.b64",
+          ),
+          "utf8",
+        ),
+        "base64",
+      ),
+    ).toString("utf8");
   } else {
     const fixture =
       workflowId === "rivet-maintenance"
@@ -205,6 +218,33 @@ test("upgrades the exact array guard before missing-information comments", async
       ".github/workflows/rivet-issue-triage.lock.yml",
       ".github/workflows/rivet-issue-triage.md",
     ],
+  );
+});
+
+test("disables an exact historical scalar issue triage installation", async (t) => {
+  const repositoryRoot = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-disable-scalar-triage-test-"),
+  );
+  t.after(() => rm(repositoryRoot, { recursive: true, force: true }));
+  await installReview({
+    repositoryRoot,
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: async () => {},
+  });
+  await writeScalarIssueGuard(repositoryRoot, DEFAULT_RIVET_CONFIG);
+  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+  configuration.issues.triage = "disabled";
+
+  const result = await installReview({
+    repositoryRoot,
+    configuration,
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: async () => {},
+  });
+
+  assert.equal(
+    result.files.filter(({ status }) => status === "delete").length,
+    5,
   );
 });
 

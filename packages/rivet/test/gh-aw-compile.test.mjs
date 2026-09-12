@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import os from "node:os";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import {
   compileGhAwWorkflow,
   validateGhAwWorkflow,
 } from "../src/gh-aw/compile.mjs";
 import { GH_AW_UPGRADE_EXPERIMENT } from "../src/gh-aw/versions.mjs";
+import { USAGE_CACHE_SAVE_CONDITION } from "../src/gh-aw/usage-cache.mjs";
 
-function successReport({ compiled = true } = {}) {
+function successReport({ compiled = true, root = "/repository" } = {}) {
   return JSON.stringify([
     {
       workflow: "rivet-review.md",
@@ -16,29 +19,43 @@ function successReport({ compiled = true } = {}) {
       warnings: [],
       ...(compiled
         ? {
-            compiled_file:
-              "/repository/.github/workflows/rivet-review.lock.yml",
+            compiled_file: path.join(
+              root,
+              ".github/workflows/rivet-review.lock.yml",
+            ),
           }
         : {}),
     },
   ]);
 }
 
-test("compiles one workflow through strict action mode", async () => {
+async function compilerRoot(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "rivet-compile-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, ".github/workflows"), { recursive: true });
+  await writeFile(
+    path.join(root, ".github/workflows/rivet-review.lock.yml"),
+    "on:\n  workflow_dispatch:\njobs: {}\n",
+  );
+  return root;
+}
+
+test("compiles one workflow through strict action mode", async (t) => {
+  const root = await compilerRoot(t);
   const calls = [];
   const result = await compileGhAwWorkflow({
-    repositoryRoot: "/repository",
+    repositoryRoot: root,
     workflowId: "rivet-review",
     binaryPath: "/cache/gh-aw",
     approveNewDependencies: true,
     execFileImpl: async (...args) => {
       calls.push(args);
-      return { stdout: successReport(), stderr: "compiler warning" };
+      return { stdout: successReport({ root }), stderr: "compiler warning" };
     },
   });
   assert.equal(
     result.compiledFile,
-    path.join("/repository", ".github", "workflows", "rivet-review.lock.yml"),
+    path.join(root, ".github", "workflows", "rivet-review.lock.yml"),
   );
   assert.equal(result.stderr, "compiler warning");
   assert.deepEqual(calls, [
@@ -57,7 +74,7 @@ test("compiles one workflow through strict action mode", async () => {
         "--approve",
       ],
       {
-        cwd: "/repository",
+        cwd: root,
         encoding: "utf8",
         maxBuffer: 16 * 1024 * 1024,
       },
@@ -65,10 +82,11 @@ test("compiles one workflow through strict action mode", async () => {
   ]);
 });
 
-test("compiles an upgrade candidate with its matching action commit", async () => {
+test("compiles an upgrade candidate with its matching action commit", async (t) => {
+  const root = await compilerRoot(t);
   let invocation;
   await compileGhAwWorkflow({
-    repositoryRoot: "/repo",
+    repositoryRoot: root,
     workflowId: "rivet-review",
     binaryPath: "/cache/gh-aw-0.86.3",
     release: GH_AW_UPGRADE_EXPERIMENT,
@@ -79,7 +97,10 @@ test("compiles an upgrade candidate with its matching action commit", async () =
           {
             valid: true,
             errors: [],
-            compiled_file: "/repo/.github/workflows/rivet-review.lock.yml",
+            compiled_file: path.join(
+              root,
+              ".github/workflows/rivet-review.lock.yml",
+            ),
           },
         ]),
         stderr: "",
@@ -113,6 +134,36 @@ test("validates one workflow with machine-readable strict output", async () => {
     "--json",
     "--no-check-update",
   ]);
+});
+
+test("compilation writes the read-only cache policy into its delivered lock", async (t) => {
+  const root = await compilerRoot(t);
+  const fixture = await readFile(
+    new URL(
+      "./fixtures/review/.github/workflows/rivet-review.lock.yml",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const original = fixture.replace(USAGE_CACHE_SAVE_CONDITION, "always()");
+  const result = await compileGhAwWorkflow({
+    repositoryRoot: root,
+    workflowId: "rivet-review",
+    binaryPath: "/cache/gh-aw",
+    execFileImpl: async () => {
+      await writeFile(
+        path.join(root, ".github/workflows/rivet-review.lock.yml"),
+        original,
+      );
+      return { stdout: successReport({ root }), stderr: "" };
+    },
+  });
+  const delivered = await readFile(result.compiledFile, "utf8");
+  assert.notEqual(delivered, original);
+  assert.equal(
+    delivered.replace(USAGE_CACHE_SAVE_CONDITION, "always()"),
+    original,
+  );
 });
 
 test("runs the pinned compiler with the supplied sanitized environment", async () => {

@@ -254,6 +254,52 @@ test("requires a useful general review body even without findings", () => {
   assert.equal(weak.checks.reviewBody, false);
 });
 
+test("matches evidence labels safely across Unicode case mappings", () => {
+  function deferredIssueCheck(term, body) {
+    const expected = manifest();
+    expected.expected.deferredIssue.bodyIncludes = [term];
+    const artifacts = reviewArtifacts();
+    artifacts.outputs.find((item) => item.type === "create_issue").body = body;
+    return evaluateReviewRun(expected, artifacts).checks.deferredIssue;
+  }
+
+  assert.equal(
+    deferredIssueCheck(
+      "İEvidence:",
+      "İEvidence:x\n\nSource PR: owner/repository#7 " + HEAD,
+    ),
+    true,
+  );
+  assert.equal(
+    deferredIssueCheck(
+      "İEvidence:",
+      "İEvidence:✓\n\nSource PR: owner/repository#7 " + HEAD,
+    ),
+    true,
+  );
+  assert.equal(
+    deferredIssueCheck(
+      "evidence:",
+      "EVIDENCE: details\n\nSource PR: owner/repository#7 " + HEAD,
+    ),
+    true,
+  );
+  assert.equal(
+    deferredIssueCheck(
+      "İEvidence:",
+      "İEvidence:   \n\nSource PR: owner/repository#7 " + HEAD,
+    ),
+    false,
+  );
+  assert.equal(
+    deferredIssueCheck(
+      "İEvidence:",
+      "İEvidence:   \nİEvidence:✓\n\nSource PR: owner/repository#7 " + HEAD,
+    ),
+    true,
+  );
+});
+
 test("CLI emits JSON and exits nonzero when a run fails", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "rivet-review-eval-"));
   context.after(() => rm(root, { recursive: true, force: true }));

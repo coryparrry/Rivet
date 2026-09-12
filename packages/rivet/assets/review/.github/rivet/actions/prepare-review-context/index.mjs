@@ -141,14 +141,10 @@ function projectFile(file, index) {
   return projected;
 }
 
-function hasCompletePatch(file, filesByPath) {
-  if (file.patch !== null) return true;
-  if (file.status === "renamed" && file.changes === 0) return true;
-  if (!file.path.endsWith(".lock.yml")) return false;
-  const source = filesByPath.get(
-    `${file.path.slice(0, -".lock.yml".length)}.md`,
+function hasCompletePatch(file) {
+  return (
+    file.patch !== null || (file.status === "renamed" && file.changes === 0)
   );
-  return source?.changes > 0 && source.patch !== null;
 }
 
 function ordinaryContextFile(file) {
@@ -591,8 +587,7 @@ export async function createReviewContext({
   if (!Array.isArray(rawFiles) || rawFiles.length !== metadata.changedFiles)
     return incomplete(metadata, "GitHub changed-file response is incomplete");
   const files = rawFiles.map(projectFile);
-  const filesByPath = new Map(files.map((file) => [file.path, file]));
-  if (files.some((file) => !hasCompletePatch(file, filesByPath)))
+  if (files.some((file) => !hasCompletePatch(file)))
     return incomplete(
       metadata,
       "GitHub comparison omits a complete changed-file patch",
