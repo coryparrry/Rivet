@@ -30,6 +30,12 @@ current-head review publication may replace that pending state with
 for `auto`. `needs tests` is present only when that successfully published
 review identifies a concrete missing deterministic test.
 
+If context preparation fails or exceeds its bounded comparison budget, the
+read-only `review_context_status` job fails the workflow. The pending-label
+reset remains independent, and no review agent or publication runs without
+a complete snapshot. A green context-preparation job alone is not evidence
+that a review completed.
+
 Rivet mutates only those four label names. Before every label mutation it
 rechecks the event pull request's identity, open state, base SHA, and head SHA,
 then verifies the final managed set. Unrelated repository labels remain

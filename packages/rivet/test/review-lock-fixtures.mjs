@@ -13,7 +13,14 @@ export async function currentReviewLock(packageRoot, workflow) {
     );
     return gunzipSync(Buffer.from(encoded, "base64")).toString("utf8");
   }
-  if (workflow.includes("\n  create-issue:\n")) {
+  const automatic = workflow.includes("\n  create-issue:\n");
+  const inline = workflow.includes(
+    "\n  create-pull-request-review-comment:\n",
+  );
+  const requestChanges = workflow.includes(
+    "allowed-events: [COMMENT, REQUEST_CHANGES]",
+  );
+  if (automatic && inline && !requestChanges) {
     return readFile(
       path.join(
         packageRoot,
@@ -22,10 +29,16 @@ export async function currentReviewLock(packageRoot, workflow) {
       "utf8",
     );
   }
+  const name = [
+    "rivet-review",
+    ...(automatic ? [] : ["disabled"]),
+    ...(inline ? [] : ["summary"]),
+    ...(requestChanges ? ["request-changes"] : []),
+  ].join("-");
   const encoded = await readFile(
     path.join(
       packageRoot,
-      "test/fixtures/review/rivet-review-disabled.lock.yml.gz.b64",
+      `test/fixtures/review/${name}.lock.yml.gz.b64`,
     ),
     "utf8",
   );

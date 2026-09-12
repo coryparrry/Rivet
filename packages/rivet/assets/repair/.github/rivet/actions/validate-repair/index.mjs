@@ -13,6 +13,8 @@ import {
 const execFileAsync = promisify(execFile);
 const API = "https://api.github.com";
 const FULL_SHA = /^[0-9a-f]{40}$/;
+const VALIDATION_IMAGE =
+  "node:22-bookworm@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a";
 
 function fail(message) {
   throw new Error(`Rivet repair validation: ${message}`);
@@ -85,6 +87,37 @@ function gitAuthEnvironment(token, env) {
     GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
     GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
   };
+}
+
+function validationEnvironment(env) {
+  const sanitized = { ...env };
+  delete sanitized.GITHUB_TOKEN;
+  return sanitized;
+}
+
+function validationContainerArguments(command, cwd) {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  return [
+    "run",
+    "--rm",
+    "--init",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    ...(Number.isInteger(uid) && Number.isInteger(gid)
+      ? ["--user", `${uid}:${gid}`]
+      : []),
+    "--mount",
+    `type=bind,source=${cwd},target=/workspace`,
+    "--tmpfs",
+    "/tmp:rw,nosuid,nodev,size=268435456",
+    "--workdir",
+    "/workspace",
+    VALIDATION_IMAGE,
+    "/bin/sh",
+    "-c",
+    command,
+  ];
 }
 
 export async function runValidateRepairAction({
@@ -161,10 +194,11 @@ export async function runValidateRepairAction({
   }
 
   const validation = [];
+  const validationEnv = validationEnvironment(env);
   for (const command of validationCommands(env)) {
-    await runImpl("/bin/sh", ["-c", command], {
+    await runImpl("docker", validationContainerArguments(command, cwd), {
       cwd,
-      env,
+      env: validationEnv,
       timeout: 10 * 60 * 1000,
       label: `validation command ${command}`,
     });

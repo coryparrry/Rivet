@@ -101,6 +101,7 @@ export async function buildWorkflowFiles({
   includeAutoTagging = true,
   includeFailureSafePendingTags = true,
   includePendingTagOutput = true,
+  useClientIdInput = true,
   reviewExtension,
   reviewWorkflowVersion,
   issueTriageWorkflowVersion,
@@ -134,6 +135,7 @@ export async function buildWorkflowFiles({
                   includeAutoTagging,
                   includeFailureSafePendingTags,
                   includePendingTagOutput,
+                  useClientIdInput,
                 })
       : renderRivetReviewWorkflowV012({ configuration: reviewConfig }),
   );

@@ -4,6 +4,7 @@ import { parseDocument } from "yaml";
 import { validateRivetConfig } from "./config.mjs";
 import { completeInstallationFiles } from "./installation-receipt.mjs";
 import { buildWorkflowFiles } from "./workflow-files.mjs";
+import { PRE_REVIEW_STATUS_EXTENSION } from "./tagging-upgrade.mjs";
 
 function installedReviewShape(source) {
   if (typeof source !== "string") return null;
@@ -12,6 +13,11 @@ function installedReviewShape(source) {
   const document = parseDocument(frontmatter[1], { uniqueKeys: true });
   if (document.errors.length) return null;
   const value = document.toJS({ maxAliasCount: 0 });
+  const safeOutputs = value["safe-outputs"];
+  const inline = safeOutputs?.["create-pull-request-review-comment"];
+  const allowedEvents = safeOutputs?.["submit-pull-request-review"]?.[
+    "allowed-events"
+  ];
   const model = {
     engine: typeof value.engine === "string" ? value.engine : value.engine?.id,
     model: value.model,
@@ -30,12 +36,25 @@ function installedReviewShape(source) {
   }
   return {
     model,
+    review: {
+      automatic: true,
+      inlineFindings: Boolean(inline),
+      requestChanges:
+        Array.isArray(allowedEvents) && allowedEvents.includes("REQUEST_CHANGES"),
+      maximumFindings: Number.isInteger(inline?.max) ? inline.max : null,
+    },
+    issueTriage: Boolean(safeOutputs?.["create-issue"]),
     includeAutoTagging: Boolean(value.jobs?.review_tags_pending),
     includeFailureSafePendingTags:
       value.jobs?.agent?.if === "needs.review_context.outputs.snapshot != ''",
     includePendingTagOutput:
       value.jobs?.review_tags_pending?.outputs?.output ===
       "${{ steps.pending-tags.outcome }}",
+    useClientIdInput: Boolean(
+      value.jobs?.review_tags_pending?.steps?.find(
+        (step) => step.id === "review-token",
+      )?.with?.["client-id"],
+    ),
   };
 }
 
@@ -48,18 +67,37 @@ export async function buildModelConfigurationBaseline({
 }) {
   const previous = installedReviewShape(previousSource);
   const previousModel = previous?.model;
+  if (!previousModel || !previous.review) return null;
+  let storedConfig = null;
+  try {
+    storedConfig = previousConfigurationContent
+      ? validateRivetConfig(JSON.parse(previousConfigurationContent))
+      : null;
+  } catch {
+    storedConfig = null;
+  }
+  const previousReview = {
+    ...previous.review,
+    maximumFindings:
+      previous.review.maximumFindings ??
+      storedConfig?.review.maximumFindings ??
+      options.config.review.maximumFindings,
+  };
+  const previousIssueTriage = previous.issueTriage ? "automatic" : "disabled";
   if (
-    !previousModel ||
-    isDeepStrictEqual(previousModel, options.config.models.review)
-  )
+    isDeepStrictEqual(previousModel, options.config.models.review) &&
+    isDeepStrictEqual(previousReview, options.config.review) &&
+    previousIssueTriage === options.config.issues.triage
+  ) {
     return null;
+  }
   let config;
   try {
-    config = previousConfigurationContent
-      ? validateRivetConfig(JSON.parse(previousConfigurationContent))
-      : structuredClone(options.config);
+    config = storedConfig ?? structuredClone(options.config);
     config = structuredClone(config);
     config.models.review = previousModel;
+    config.review = previousReview;
+    config.issues.triage = previousIssueTriage;
     validateRivetConfig(config);
   } catch {
     return null;
@@ -76,8 +114,11 @@ export async function buildModelConfigurationBaseline({
     includeAutoTagging: previous.includeAutoTagging,
     includeFailureSafePendingTags: previous.includeFailureSafePendingTags,
     includePendingTagOutput: previous.includePendingTagOutput,
+    useClientIdInput: previous.useClientIdInput,
     reviewExtension: previous.includeFailureSafePendingTags
-      ? undefined
+      ? previous.useClientIdInput
+        ? undefined
+        : await readFile(PRE_REVIEW_STATUS_EXTENSION, "utf8")
       : await readFile(
           new URL(
             "../assets/upgrades/pre-pending-tag-isolation/review-extension.md",

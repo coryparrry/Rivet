@@ -4,6 +4,7 @@ import {
   assessIssueTriageTrust,
   assessMaintenanceTrust,
   assessPullRequestTargetTrust,
+  assessRepairTrust,
 } from "./gh-aw/trust.mjs";
 import {
   RIVET_ISSUE_TRIAGE_NATIVE_IMPORTS,
@@ -14,6 +15,10 @@ import {
   RIVET_MAINTENANCE_NATIVE_IMPORTS,
   RIVET_MAINTENANCE_WORKFLOW_ID,
 } from "./workflows/maintenance.mjs";
+import {
+  RIVET_REPAIR_NATIVE_IMPORTS,
+  RIVET_REPAIR_WORKFLOW_ID,
+} from "./workflows/repair.mjs";
 import {
   RIVET_REVIEW_NATIVE_IMPORTS,
   RIVET_REVIEW_WORKFLOW_ID,
@@ -29,8 +34,17 @@ const ISSUE_LOCAL_ACTIONS = Object.freeze([
 ]);
 
 const MAINTENANCE_LOCAL_ACTION = "./.github/rivet/actions/validate-audit";
+const REPAIR_LOCAL_ACTIONS = Object.freeze([
+  "./.github/rivet/actions/publish-repair",
+  "./.github/rivet/actions/validate-repair",
+]);
 
-export function assertInstallationTrust({ files, trustFiles = files, config }) {
+export function assertInstallationTrust({
+  files,
+  trustFiles = files,
+  config,
+  validation = ["npm test"],
+}) {
   const endpoint = config.models.review.endpoint;
   const trust = assessPullRequestTargetTrust({
     authority: inspectCompiledWorkflow(
@@ -40,7 +54,9 @@ export function assertInstallationTrust({ files, trustFiles = files, config }) {
     expectedImports: RIVET_REVIEW_NATIVE_IMPORTS,
     expectedLocalActions: REVIEW_LOCAL_ACTIONS,
     expectedModel: config.models.review.model,
+    expectedInlineFindings: config.review.inlineFindings,
     expectedMaximumFindings: config.review.maximumFindings,
+    expectedRequestChanges: config.review.requestChanges,
     expectedIssueTriage:
       config.issues.triage === "automatic" ? "automatic" : "disabled",
   });
@@ -89,6 +105,23 @@ export function assertInstallationTrust({ files, trustFiles = files, config }) {
     if (!maintenanceTrust.trusted) {
       throw new Error(
         `Rivet installer: compiled maintenance workflow is not trusted: ${maintenanceTrust.violations.join("; ")}`,
+      );
+    }
+  }
+  if (config.repair.authority === "owner") {
+    const repairTrust = assessRepairTrust({
+      authority: inspectCompiledWorkflow(
+        trustFiles.get(`.github/workflows/${RIVET_REPAIR_WORKFLOW_ID}.lock.yml`),
+      ),
+      expectedEngine: config.models.review.engine,
+      expectedImports: RIVET_REPAIR_NATIVE_IMPORTS,
+      expectedLocalActions: REPAIR_LOCAL_ACTIONS,
+      expectedModel: config.models.review.model,
+      expectedValidationCommands: validation,
+    });
+    if (!repairTrust.trusted) {
+      throw new Error(
+        `Rivet installer: compiled repair workflow is not trusted: ${repairTrust.violations.join("; ")}`,
       );
     }
   }

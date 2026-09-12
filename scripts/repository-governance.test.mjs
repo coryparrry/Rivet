@@ -1,11 +1,34 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   loadGovernancePolicy,
   reconciliationPlan,
   rulesetPayload,
   validateGovernancePolicy,
 } from "./repository-governance.mjs";
+
+const REPOSITORY_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const ACTIVE_GOVERNANCE_FILES = [
+  ".github/dependabot.yml",
+  ".github/CODEOWNERS",
+  ".github/actionlint.yaml",
+  ".github/ISSUE_TEMPLATE/bug.yml",
+  ".github/ISSUE_TEMPLATE/feature.yml",
+  "scripts/repository-governance.mjs",
+  "scripts/repository-governance.test.mjs",
+];
+const RETIRED_PRODUCT = ["code", "keeper"].join("");
+const RETIRED_PATHS = [
+  ["/tools", RETIRED_PRODUCT].join("/"),
+  ["/packages", RETIRED_PRODUCT].join("/"),
+  ["/", "acceptance"].join(""),
+];
 
 function policy() {
   return {
@@ -74,6 +97,26 @@ function policy() {
 test("binds the checked-in governance policy to the Rivet repository", async () => {
   const checkedInPolicy = await loadGovernancePolicy();
   assert.equal(checkedInPolicy.repository, "coryparrry/Rivet");
+});
+
+test("active governance files do not reference retired product paths", async () => {
+  const violations = [];
+  for (const relativePath of ACTIVE_GOVERNANCE_FILES) {
+    const source = await readFile(
+      path.join(REPOSITORY_ROOT, relativePath),
+      "utf8",
+    );
+    const normalized = source.toLowerCase();
+    if (normalized.includes(RETIRED_PRODUCT)) {
+      violations.push(`${relativePath}: retired product terminology`);
+    }
+    for (const retiredPath of RETIRED_PATHS) {
+      if (source.includes(retiredPath)) {
+        violations.push(`${relativePath}: retired path ${retiredPath}`);
+      }
+    }
+  }
+  assert.deepEqual(violations, []);
 });
 
 test("governance requires explicit non-automatic branch and tag rules", () => {

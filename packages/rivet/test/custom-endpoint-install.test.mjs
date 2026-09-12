@@ -32,6 +32,7 @@ for (const previous of [
   "pre-auto-tagging",
   "pre-pending-tag-isolation",
   "pre-pending-tag-output",
+  "pre-review-status",
 ]) {
   test(`combines ${previous} upgrade with an endpoint change and preserves edited files`, async (t) => {
     const oldSource = await readFile(
@@ -72,20 +73,22 @@ for (const previous of [
       );
       await writeFile(`${file}.md`, oldSource);
       await writeFile(`${file}.lock.yml`, oldLock);
-      if (previous !== "pre-pending-tag-output")
-        await writeFile(
-          path.join(
-            options.repositoryRoot,
-            ".github/rivet/aw/review-extension.md",
+      await writeFile(
+        path.join(
+          options.repositoryRoot,
+          ".github/rivet/aw/review-extension.md",
+        ),
+        await readFile(
+          new URL(
+            previous === "pre-pending-tag-output" ||
+              previous === "pre-review-status"
+              ? "../assets/upgrades/pre-review-status/review-extension.md"
+              : "../assets/upgrades/pre-pending-tag-isolation/review-extension.md",
+            import.meta.url,
           ),
-          await readFile(
-            new URL(
-              "../assets/upgrades/pre-pending-tag-isolation/review-extension.md",
-              import.meta.url,
-            ),
-            "utf8",
-          ),
-        );
+          "utf8",
+        ),
+      );
       const configuration = customEndpointConfiguration();
       await writeFile(
         path.join(options.repositoryRoot, ".github/rivet.json"),
