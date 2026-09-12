@@ -45,6 +45,16 @@ const AUTHORITY_DECLARATION_NAMES = Object.freeze([
   "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
   "RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE",
 ]);
+const TRUST_AUTHORITY_DECLARATION_NAMES = Object.freeze([
+  "RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY",
+  "RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE",
+  "RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE",
+]);
+const MAINTENANCE_AUTHORITY_DECLARATION_NAMES = Object.freeze([
+  "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
+]);
 const OBJECT_DECLARATION_NAMES = new Set([
   "RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY",
   "RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE",
@@ -55,6 +65,10 @@ const OBJECT_DECLARATION_NAMES = new Set([
 ]);
 const AGENT_ASSET_ROOT = new URL("../assets/agents/", import.meta.url);
 const TRUST_PATH = new URL("../src/gh-aw/trust.mjs", import.meta.url);
+const MAINTENANCE_TRUST_PATH = new URL(
+  "../src/gh-aw/maintenance-trust-inventory.mjs",
+  import.meta.url,
+);
 
 const WORKFLOW_ASSETS = Object.freeze({
   review: Object.freeze({
@@ -101,12 +115,12 @@ function authorityDeclarationPattern(name) {
     : new RegExp(`^export const ${escaped} =\\n  "[^"\\r\\n]*";$`, "gm");
 }
 
-function locateAuthorityDeclaration(source, name) {
+function locateAuthorityDeclaration(source, name, sourceName = "trust.mjs") {
   const pattern = authorityDeclarationPattern(name);
   const matches = [...source.matchAll(pattern)];
   if (matches.length !== 1) {
     throw new Error(
-      `authority declaration ${name} must occur exactly once in trust.mjs`,
+      `authority declaration ${name} must occur exactly once in ${sourceName}`,
     );
   }
   const [match] = matches;
@@ -119,13 +133,17 @@ function locateAuthorityDeclaration(source, name) {
   };
 }
 
-function validateAuthorityReplacement(name, replacement) {
+function validateAuthorityReplacement(
+  name,
+  replacement,
+  sourceName = "trust.mjs",
+) {
   if (typeof replacement !== "string") {
     throw new Error(
       `authority replacement ${name} must be a declaration string`,
     );
   }
-  const located = locateAuthorityDeclaration(replacement, name);
+  const located = locateAuthorityDeclaration(replacement, name, sourceName);
   if (located.start !== 0 || located.end !== replacement.length) {
     throw new Error(
       `authority replacement ${name} must contain exactly one declaration`,
@@ -147,23 +165,32 @@ function validateAuthorityReplacement(name, replacement) {
  * exact declarations and makes malformed or incomplete source fail closed
  * before any replacement is returned to the caller.
  */
-export function replaceAuthorityDeclarations(source, replacements) {
+function replaceAuthorityDeclarationsInSource(
+  source,
+  replacements,
+  declarationNames,
+  sourceName,
+) {
   if (typeof source !== "string") {
-    throw new Error("trust.mjs source must be a string");
+    throw new Error(`${sourceName} source must be a string`);
   }
   if (
     !replacements ||
     typeof replacements !== "object" ||
     Array.isArray(replacements) ||
     JSON.stringify(Object.keys(replacements).sort()) !==
-      JSON.stringify([...AUTHORITY_DECLARATION_NAMES].sort())
+      JSON.stringify([...declarationNames].sort())
   ) {
-    throw new Error("authority declaration replacements are incomplete");
+    throw new Error(
+      sourceName === "trust.mjs"
+        ? "authority declaration replacements are incomplete"
+        : `authority declaration replacements for ${sourceName} are incomplete`,
+    );
   }
 
-  const located = AUTHORITY_DECLARATION_NAMES.map((name) => {
-    const declaration = locateAuthorityDeclaration(source, name);
-    validateAuthorityReplacement(name, replacements[name]);
+  const located = declarationNames.map((name) => {
+    const declaration = locateAuthorityDeclaration(source, name, sourceName);
+    validateAuthorityReplacement(name, replacements[name], sourceName);
     return { ...declaration, name, replacement: replacements[name] };
   });
 
@@ -177,6 +204,22 @@ export function replaceAuthorityDeclarations(source, replacements) {
       updated.slice(declaration.end);
   }
   return updated;
+}
+
+/**
+ * Replace every generated authority declaration as one validated set.
+ *
+ * This public helper intentionally retains its original all-declarations
+ * contract for synthetic callers. The real refresh uses the source-specific
+ * helper below because maintenance declarations live in their own module.
+ */
+export function replaceAuthorityDeclarations(source, replacements) {
+  return replaceAuthorityDeclarationsInSource(
+    source,
+    replacements,
+    AUTHORITY_DECLARATION_NAMES,
+    "trust.mjs",
+  );
 }
 
 function digestValue(value, label) {
@@ -261,6 +304,21 @@ function authorityDeclarations({ review, issueTriage, maintenance, repair }) {
       repair,
     ),
   };
+}
+
+function declarationsForNames(declarations, names) {
+  return Object.fromEntries(names.map((name) => [name, declarations[name]]));
+}
+
+async function readAuthoritySource(read, sourcePath, sourceName) {
+  try {
+    return await read(sourcePath, "utf8");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`unable to read ${sourceName}: ${detail}`, {
+      cause: error,
+    });
+  }
 }
 
 function workflowConfiguration(engine) {
@@ -490,9 +548,19 @@ export async function refreshReviewAuthority({
   trustPath = TRUST_PATH,
   readTrust = readFile,
   writeTrust = writeFile,
+  maintenanceTrustPath = MAINTENANCE_TRUST_PATH,
+  readMaintenanceTrust = readFile,
+  writeMaintenanceTrust = writeFile,
 } = {}) {
   const binaryPath = await ensureBinary();
-  const original = await readTrust(trustPath, "utf8");
+  const [original, maintenanceOriginal] = await Promise.all([
+    readAuthoritySource(readTrust, trustPath, "trust.mjs"),
+    readAuthoritySource(
+      readMaintenanceTrust,
+      maintenanceTrustPath,
+      "maintenance-trust-inventory.mjs",
+    ),
+  ]);
   const [review, issueTriage, maintenance, repair] = await Promise.all([
     generateReviewInventories({
       binaryPath,
@@ -523,17 +591,29 @@ export async function refreshReviewAuthority({
       inspectWorkflow,
     }),
   ]);
-  const updated = replaceAuthorityDeclarations(
+  const replacements = authorityDeclarations({
+    review,
+    issueTriage,
+    maintenance,
+    repair,
+  });
+  // Compute and validate both complete source updates before either write.
+  const updated = replaceAuthorityDeclarationsInSource(
     original,
-    authorityDeclarations({
-      review,
-      issueTriage,
-      maintenance,
-      repair,
-    }),
+    declarationsForNames(replacements, TRUST_AUTHORITY_DECLARATION_NAMES),
+    TRUST_AUTHORITY_DECLARATION_NAMES,
+    "trust.mjs",
   );
-  if (write) await writeTrust(trustPath, updated);
-  else if (updated !== original)
+  const updatedMaintenance = replaceAuthorityDeclarationsInSource(
+    maintenanceOriginal,
+    declarationsForNames(replacements, MAINTENANCE_AUTHORITY_DECLARATION_NAMES),
+    MAINTENANCE_AUTHORITY_DECLARATION_NAMES,
+    "maintenance-trust-inventory.mjs",
+  );
+  if (write) {
+    await writeTrust(trustPath, updated);
+    await writeMaintenanceTrust(maintenanceTrustPath, updatedMaintenance);
+  } else if (updated !== original || updatedMaintenance !== maintenanceOriginal)
     throw new Error("authority inventories differ from pinned compiler output");
 }
 

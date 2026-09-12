@@ -17,6 +17,16 @@ const refreshReviewAuthorityPath = fileURLToPath(
 );
 
 const ENGINES = ["claude", "codex", "copilot", "gemini"];
+const TRUST_DECLARATION_NAMES = [
+  "RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY",
+  "RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE",
+  "RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE",
+];
+const MAINTENANCE_DECLARATION_NAMES = [
+  "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
+];
 const hash = (character) => character.repeat(64);
 const engineDeclaration = (name, character) =>
   `export const ${name} = Object.freeze({\n${ENGINES.map(
@@ -57,6 +67,52 @@ function declarations(character) {
       character,
     ),
   };
+}
+
+function sourceForDeclarations(allDeclarations, names) {
+  return names.map((name) => allDeclarations[name]).join("\n");
+}
+
+async function runRefreshWithSources({
+  trustSource,
+  maintenanceSource,
+  writes,
+}) {
+  const temporaryParent = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-refresh-authority-split-test-"),
+  );
+  try {
+    await refreshReviewAuthority({
+      temporaryParent,
+      ensureBinary: async () => "pinned-gh-aw",
+      readTrust: async () => trustSource,
+      readMaintenanceTrust: async () => maintenanceSource,
+      writeTrust: async (_path, value) => {
+        writes.push({ source: "trust.mjs", value });
+      },
+      writeMaintenanceTrust: async (_path, value) => {
+        writes.push({
+          source: "maintenance-trust-inventory.mjs",
+          value,
+        });
+      },
+      compileWorkflow: async ({ repositoryRoot, workflowId }) => {
+        await writeFile(
+          path.join(
+            repositoryRoot,
+            ".github/workflows",
+            `${workflowId}.lock.yml`,
+          ),
+          "compiled",
+        );
+      },
+      validateWorkflow: async () => {},
+      inspectWorkflow: () => ({}),
+      write: true,
+    });
+  } finally {
+    await rm(temporaryParent, { recursive: true, force: true });
+  }
 }
 
 test("replaces every generated authority declaration as one validated set", () => {
@@ -104,15 +160,28 @@ test("compiles maintenance in both modes for every supported engine", async () =
     path.join(os.tmpdir(), "rivet-refresh-authority-test-"),
   );
   const maintenanceVariants = [];
-  const source = Object.values(declarations("a")).join("\n");
+  const originalDeclarations = declarations("a");
+  const source = sourceForDeclarations(
+    originalDeclarations,
+    TRUST_DECLARATION_NAMES,
+  );
+  const maintenanceSource = sourceForDeclarations(
+    originalDeclarations,
+    MAINTENANCE_DECLARATION_NAMES,
+  );
   let updated;
+  let updatedMaintenance;
   try {
     await refreshReviewAuthority({
       temporaryParent,
       ensureBinary: async () => "pinned-gh-aw",
       readTrust: async () => source,
+      readMaintenanceTrust: async () => maintenanceSource,
       writeTrust: async (_path, value) => {
         updated = value;
+      },
+      writeMaintenanceTrust: async (_path, value) => {
+        updatedMaintenance = value;
       },
       compileWorkflow: async ({ repositoryRoot, workflowId }) => {
         const workflowPath = path.join(
@@ -149,6 +218,7 @@ test("compiles maintenance in both modes for every supported engine", async () =
   }
 
   assert.ok(updated);
+  assert.ok(updatedMaintenance);
   assert.deepEqual(maintenanceVariants, [
     { engine: "claude", mode: "manual" },
     { engine: "claude", mode: "scheduled" },
@@ -159,12 +229,119 @@ test("compiles maintenance in both modes for every supported engine", async () =
     { engine: "gemini", mode: "manual" },
     { engine: "gemini", mode: "scheduled" },
   ]);
-  for (const name of [
-    "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
-    "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
-    "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
-  ]) {
-    assert.match(updated, new RegExp(`${name} = Object\\.freeze\\({`));
+  for (const name of TRUST_DECLARATION_NAMES) {
+    assert.match(updated, new RegExp(`${name} = `));
+    assert.doesNotMatch(updated, new RegExp(`RIVET_MAINTENANCE_`));
+  }
+  for (const name of MAINTENANCE_DECLARATION_NAMES) {
+    assert.match(
+      updatedMaintenance,
+      new RegExp(`${name} = Object\\.freeze\\({`),
+    );
+    assert.doesNotMatch(
+      updatedMaintenance,
+      /RIVET_REVIEW_AUTHORITY|RIVET_ISSUE_TRIAGE_AUTHORITY|RIVET_REPAIR_AUTHORITY/,
+    );
+  }
+});
+
+test("validates both split authority sources before writing either", async () => {
+  const original = declarations("a");
+  const cases = [];
+  for (const name of TRUST_DECLARATION_NAMES) {
+    const missing = { ...original };
+    delete missing[name];
+    cases.push({
+      label: `missing ${name} from trust.mjs`,
+      trustSource: sourceForDeclarations(missing, TRUST_DECLARATION_NAMES),
+      maintenanceSource: sourceForDeclarations(
+        original,
+        MAINTENANCE_DECLARATION_NAMES,
+      ),
+      error: new RegExp(
+        `authority declaration ${name} must occur exactly once in trust\\.mjs`,
+      ),
+    });
+    cases.push({
+      label: `duplicate ${name} in trust.mjs`,
+      trustSource: `${sourceForDeclarations(
+        original,
+        TRUST_DECLARATION_NAMES,
+      )}\n${original[name]}`,
+      maintenanceSource: sourceForDeclarations(
+        original,
+        MAINTENANCE_DECLARATION_NAMES,
+      ),
+      error: new RegExp(
+        `authority declaration ${name} must occur exactly once in trust\\.mjs`,
+      ),
+    });
+  }
+  for (const name of MAINTENANCE_DECLARATION_NAMES) {
+    const missing = { ...original };
+    delete missing[name];
+    cases.push({
+      label: `missing ${name} from maintenance-trust-inventory.mjs`,
+      trustSource: sourceForDeclarations(original, TRUST_DECLARATION_NAMES),
+      maintenanceSource: sourceForDeclarations(
+        missing,
+        MAINTENANCE_DECLARATION_NAMES,
+      ),
+      error: new RegExp(
+        `authority declaration ${name} must occur exactly once in maintenance-trust-inventory\\.mjs`,
+      ),
+    });
+    cases.push({
+      label: `duplicate ${name} in maintenance-trust-inventory.mjs`,
+      trustSource: sourceForDeclarations(original, TRUST_DECLARATION_NAMES),
+      maintenanceSource: `${sourceForDeclarations(
+        original,
+        MAINTENANCE_DECLARATION_NAMES,
+      )}\n${original[name]}`,
+      error: new RegExp(
+        `authority declaration ${name} must occur exactly once in maintenance-trust-inventory\\.mjs`,
+      ),
+    });
+  }
+  for (const name of TRUST_DECLARATION_NAMES) {
+    const malformed = { ...original };
+    malformed[name] = `export const ${name} = "not-a-digest";`;
+    cases.push({
+      label: `malformed ${name} in trust.mjs`,
+      trustSource: sourceForDeclarations(malformed, TRUST_DECLARATION_NAMES),
+      maintenanceSource: sourceForDeclarations(
+        original,
+        MAINTENANCE_DECLARATION_NAMES,
+      ),
+      error: new RegExp(
+        `authority declaration ${name} must occur exactly once in trust\\.mjs`,
+      ),
+    });
+  }
+  for (const name of MAINTENANCE_DECLARATION_NAMES) {
+    const malformed = { ...original };
+    malformed[name] = `export const ${name} = "not-a-digest";`;
+    cases.push({
+      label: `malformed ${name} in maintenance-trust-inventory.mjs`,
+      trustSource: sourceForDeclarations(original, TRUST_DECLARATION_NAMES),
+      maintenanceSource: sourceForDeclarations(
+        malformed,
+        MAINTENANCE_DECLARATION_NAMES,
+      ),
+      error: new RegExp(
+        `authority declaration ${name} must occur exactly once in maintenance-trust-inventory\\.mjs`,
+      ),
+    });
+  }
+
+  for (const { label, trustSource, maintenanceSource, error } of cases) {
+    const writes = [];
+    await assert.rejects(
+      runRefreshWithSources({ trustSource, maintenanceSource, writes }),
+      error,
+      label,
+    );
+    assert.deepEqual(writes, [], label);
   }
 });
 
