@@ -1,10 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  access,
-  mkdir,
-  readFile,
-  writeFile,
-} from "node:fs/promises";
+import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -31,6 +26,29 @@ import {
   REVIEW_EXTENSION_PATH,
   writeLegacyInstallation,
 } from "./install-test-helpers.mjs";
+
+function authorityWideningCompiler(targetWorkflowId) {
+  return async (options) => {
+    await fixtureCompiler(options);
+    if (options.workflowId !== targetWorkflowId) return;
+    const lockPath = path.join(
+      options.repositoryRoot,
+      `.github/workflows/${options.workflowId}.lock.yml`,
+    );
+    const source = await readFile(lockPath, "utf8");
+    const widened = source.replace(
+      "runs-on: ubuntu-latest",
+      "runs-on: macos-latest",
+    );
+    assert.notEqual(
+      widened,
+      source,
+      `${targetWorkflowId} fixture has a runner`,
+    );
+    await writeFile(lockPath, widened);
+  };
+}
+
 test("installs only the trusted Rivet review mode", async (t) => {
   const repositoryRoot = await repository(t);
   const result = await installReview({
@@ -112,6 +130,90 @@ test("installs only the trusted Rivet review mode", async (t) => {
   });
   assert.ok(repeated.files.every(({ status }) => status === "unchanged"));
 });
+test("regenerates a semantically matching installation receipt", async (t) => {
+  const repositoryRoot = await repository(t);
+  await installReview({
+    repositoryRoot,
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: fixtureValidator,
+  });
+  const receiptPath = path.join(
+    repositoryRoot,
+    ".github/rivet/installation.json",
+  );
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.compiler.version = "0.0.0-previous";
+  await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`);
+
+  const result = await installReview({
+    repositoryRoot,
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: fixtureValidator,
+  });
+
+  assert.equal(
+    result.files.find(
+      ({ path: relativePath }) =>
+        relativePath === ".github/rivet/installation.json",
+    ).status,
+    "update",
+  );
+  const updated = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.equal(updated.compiler.version, "0.86.2");
+});
+for (const { name, workflowId, install, configuration } of [
+  {
+    name: "review",
+    workflowId: "rivet-review",
+    install: installReview,
+    configuration: structuredClone(DEFAULT_RIVET_CONFIG),
+  },
+  {
+    name: "issue triage",
+    workflowId: "rivet-issue-triage",
+    install: installReview,
+    configuration: structuredClone(DEFAULT_RIVET_CONFIG),
+  },
+  {
+    name: "maintenance",
+    workflowId: "rivet-maintenance",
+    install: installReview,
+    configuration: (() => {
+      const value = structuredClone(DEFAULT_RIVET_CONFIG);
+      value.maintenance.mode = "manual";
+      return value;
+    })(),
+  },
+  {
+    name: "repair",
+    workflowId: "rivet-repair",
+    install: installRepair,
+    configuration: (() => {
+      const value = structuredClone(DEFAULT_RIVET_CONFIG);
+      value.repair.authority = "owner";
+      return value;
+    })(),
+  },
+]) {
+  test(`installer rejects widened compiled ${name} authority`, async (t) => {
+    const repositoryRoot = await repository(t);
+    await assert.rejects(
+      install({
+        repositoryRoot,
+        configuration,
+        compileWorkflow: authorityWideningCompiler(workflowId),
+        validateWorkflow: fixtureValidator,
+      }),
+      new RegExp(`compiled ${name} workflow is not trusted`),
+    );
+    await assert.rejects(
+      access(path.join(repositoryRoot, ".github/rivet.json")),
+      {
+        code: "ENOENT",
+      },
+    );
+  });
+}
 test("dry-run compiles and reports without writing repository files", async (t) => {
   const repositoryRoot = await repository(t);
   const result = await installReview({
@@ -269,139 +371,6 @@ test("transitions exact maintenance installs between manual and scheduled", asyn
   });
   assert.equal(countStatus(manualResult, "update"), 4);
   assert.equal(countStatus(manualResult, "delete"), 0);
-});
-test("disables maintenance with five exact deletion entries", async (t) => {
-  const repositoryRoot = await repository(t);
-  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
-  configuration.maintenance.mode = "scheduled";
-  await installReview({
-    repositoryRoot,
-    configuration,
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  const unrelatedPath = ".github/workflows/rivet-maintenance.extra.md";
-  const unrelatedFile = path.join(repositoryRoot, unrelatedPath);
-  await mkdir(path.dirname(unrelatedFile), { recursive: true });
-  await writeFile(unrelatedFile, "adopter-owned\n");
-  const result = await installReview({
-    repositoryRoot,
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  assert.deepEqual(
-    result.files
-      .filter(({ status }) => status === "delete")
-      .map(({ path: filePath }) => filePath)
-      .sort(),
-    [...MAINTENANCE_PATHS].sort(),
-  );
-  assert.equal(
-    result.files.filter(({ status }) => status === "delete").length,
-    5,
-  );
-  assert.equal(
-    result.files.filter(({ status }) => status === "update").length,
-    2,
-  );
-  for (const relativePath of MAINTENANCE_PATHS) {
-    await assert.rejects(access(path.join(repositoryRoot, relativePath)), {
-      code: "ENOENT",
-    });
-  }
-  assert.equal(
-    await readFile(path.join(repositoryRoot, unrelatedPath), "utf8"),
-    "adopter-owned\n",
-  );
-});
-test("refuses a modified maintenance file when disabling", async (t) => {
-  const repositoryRoot = await repository(t);
-  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
-  configuration.maintenance.mode = "manual";
-  await installReview({
-    repositoryRoot,
-    configuration,
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  const modifiedPath = MAINTENANCE_PATHS[2];
-  const modifiedFile = path.join(repositoryRoot, modifiedPath);
-  const modified = `${await readFile(modifiedFile, "utf8")}modified\n`;
-  await writeFile(modifiedFile, modified);
-  const configurationPath = path.join(repositoryRoot, ".github/rivet.json");
-  const configurationBytes = await readFile(configurationPath, "utf8");
-  await assert.rejects(
-    installReview({
-      repositoryRoot,
-      compileWorkflow: fixtureCompiler,
-      validateWorkflow: fixtureValidator,
-    }),
-    new RegExp(`refusing to delete ${modifiedPath.replaceAll("/", "\\/")}`),
-  );
-  assert.equal(await readFile(modifiedFile, "utf8"), modified);
-  assert.equal(await readFile(configurationPath, "utf8"), configurationBytes);
-});
-test("refuses a maintenance file changed after a disable plan", async (t) => {
-  const repositoryRoot = await repository(t);
-  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
-  configuration.maintenance.mode = "scheduled";
-  await installReview({
-    repositoryRoot,
-    configuration,
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  const plan = await prepareReviewInstallation({
-    repositoryRoot,
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  const modifiedPath = MAINTENANCE_PATHS[4];
-  const modifiedFile = path.join(repositoryRoot, modifiedPath);
-  const modified = `${await readFile(modifiedFile, "utf8")}modified\n`;
-  await writeFile(modifiedFile, modified);
-  await assert.rejects(applyInstallation(plan), /changed after planning/);
-  assert.equal(await readFile(modifiedFile, "utf8"), modified);
-  for (const relativePath of MAINTENANCE_PATHS) {
-    await access(path.join(repositoryRoot, relativePath));
-  }
-});
-test("transitions and disables maintenance in repair mode", async (t) => {
-  const repositoryRoot = await repository(t);
-  const manualConfiguration = structuredClone(DEFAULT_RIVET_CONFIG);
-  manualConfiguration.repair.authority = "owner";
-  manualConfiguration.maintenance.mode = "manual";
-  await installRepair({
-    repositoryRoot,
-    configuration: manualConfiguration,
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  const scheduledConfiguration = structuredClone(manualConfiguration);
-  scheduledConfiguration.maintenance.mode = "scheduled";
-  const scheduledResult = await installRepair({
-    repositoryRoot,
-    configuration: scheduledConfiguration,
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  assert.equal(
-    scheduledResult.files.filter(({ status }) => status === "update").length,
-    4,
-  );
-  const disabledResult = await installRepair({
-    repositoryRoot,
-    configuration: {
-      ...structuredClone(manualConfiguration),
-      maintenance: { mode: "disabled" },
-    },
-    compileWorkflow: fixtureCompiler,
-    validateWorkflow: fixtureValidator,
-  });
-  assert.equal(
-    disabledResult.files.filter(({ status }) => status === "delete").length,
-    5,
-  );
 });
 test("installs a fresh repair with both active agent profiles", async (t) => {
   const repositoryRoot = await repository(t);
@@ -750,51 +719,48 @@ test("upgrades a triage-disabled review without granting Issues", async (t) => {
   );
 });
 for (const prewriteConfiguration of [false, true]) {
-  test(
-    `disables exact issue triage with five deletions${prewriteConfiguration ? " after config prewrite" : ""}`,
-    async (t) => {
-      const repositoryRoot = await repository(t);
-      await installReview({
-        repositoryRoot,
-        compileWorkflow: fixtureCompiler,
-        validateWorkflow: fixtureValidator,
-      });
-      const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
-      configuration.issues.triage = "disabled";
-      if (prewriteConfiguration) {
-        await writeFile(
-          path.join(repositoryRoot, ".github/rivet.json"),
-          `${JSON.stringify(configuration, null, 2)}\n`,
-        );
-      }
-
-      const result = await installReview({
-        repositoryRoot,
-        configuration,
-        compileWorkflow: fixtureCompiler,
-        validateWorkflow: fixtureValidator,
-      });
-
-      assert.equal(countStatus(result, "delete"), 5);
-      assert.equal(result.githubApp.permissions.issues, undefined);
-      for (const relativePath of ISSUE_TRIAGE_PATHS) {
-        await assert.rejects(access(path.join(repositoryRoot, relativePath)), {
-          code: "ENOENT",
-        });
-      }
-      const receipt = JSON.parse(
-        await readFile(
-          path.join(repositoryRoot, ".github/rivet/installation.json"),
-          "utf8",
-        ),
+  test(`disables exact issue triage with five deletions${prewriteConfiguration ? " after config prewrite" : ""}`, async (t) => {
+    const repositoryRoot = await repository(t);
+    await installReview({
+      repositoryRoot,
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: fixtureValidator,
+    });
+    const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+    configuration.issues.triage = "disabled";
+    if (prewriteConfiguration) {
+      await writeFile(
+        path.join(repositoryRoot, ".github/rivet.json"),
+        `${JSON.stringify(configuration, null, 2)}\n`,
       );
-      assert.ok(
-        receipt.managedFiles.every(
-          (relativePath) => !ISSUE_TRIAGE_PATHS.includes(relativePath),
-        ),
-      );
-    },
-  );
+    }
+
+    const result = await installReview({
+      repositoryRoot,
+      configuration,
+      compileWorkflow: fixtureCompiler,
+      validateWorkflow: fixtureValidator,
+    });
+
+    assert.equal(countStatus(result, "delete"), 5);
+    assert.equal(result.githubApp.permissions.issues, undefined);
+    for (const relativePath of ISSUE_TRIAGE_PATHS) {
+      await assert.rejects(access(path.join(repositoryRoot, relativePath)), {
+        code: "ENOENT",
+      });
+    }
+    const receipt = JSON.parse(
+      await readFile(
+        path.join(repositoryRoot, ".github/rivet/installation.json"),
+        "utf8",
+      ),
+    );
+    assert.ok(
+      receipt.managedFiles.every(
+        (relativePath) => !ISSUE_TRIAGE_PATHS.includes(relativePath),
+      ),
+    );
+  });
 }
 test("refuses modified issue-triage files when disabling", async (t) => {
   const repositoryRoot = await repository(t);
@@ -821,6 +787,31 @@ test("refuses modified issue-triage files when disabling", async (t) => {
     /refusing to delete \.github\/rivet\/agents\/issue-triager\.md/,
   );
   assert.equal(await readFile(modifiedPath, "utf8"), "adopter-owned\n");
+});
+test("finishes a partially applied issue-triage disable", async (t) => {
+  const repositoryRoot = await repository(t);
+  await installReview({
+    repositoryRoot,
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: fixtureValidator,
+  });
+  await unlink(path.join(repositoryRoot, ISSUE_TRIAGE_PATHS[1]));
+  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+  configuration.issues.triage = "disabled";
+
+  const result = await installReview({
+    repositoryRoot,
+    configuration,
+    compileWorkflow: fixtureCompiler,
+    validateWorkflow: fixtureValidator,
+  });
+
+  assert.equal(countStatus(result, "delete"), ISSUE_TRIAGE_PATHS.length - 1);
+  for (const relativePath of ISSUE_TRIAGE_PATHS) {
+    await assert.rejects(access(path.join(repositoryRoot, relativePath)), {
+      code: "ENOENT",
+    });
+  }
 });
 test("disables issue triage in an exact repair installation", async (t) => {
   const repositoryRoot = await repository(t);
@@ -871,10 +862,7 @@ for (const [name, change] of [
     });
     assert.deepEqual(
       JSON.parse(
-        await readFile(
-          path.join(repositoryRoot, ".github/rivet.json"),
-          "utf8",
-        ),
+        await readFile(path.join(repositoryRoot, ".github/rivet.json"), "utf8"),
       ).review,
       configuration.review,
     );
@@ -901,10 +889,7 @@ test("updates a dormant finding limit on an exact inline-disabled installation",
   });
   assert.equal(
     JSON.parse(
-      await readFile(
-        path.join(repositoryRoot, ".github/rivet.json"),
-        "utf8",
-      ),
+      await readFile(path.join(repositoryRoot, ".github/rivet.json"), "utf8"),
     ).review.maximumFindings,
     3,
   );

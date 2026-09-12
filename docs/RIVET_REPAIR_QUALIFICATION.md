@@ -1,6 +1,9 @@
-# Rivet repair qualification
+# Rivet repair qualification (historical gate record)
 
-Rivet repair is a gated candidate, not an installed capability. The candidate tests the pinned gh-aw `push-to-pull-request-branch` primitive against the repair boundary before Rivet gains write authority.
+This document records the historical qualification gate for Rivet repair. Rivet
+now ships an explicit owner-authorized repair installation, but the remaining
+lineage and live-authority work below is still pending; this record does not
+claim that those gates are complete.
 
 ## Candidate controls
 
@@ -19,7 +22,9 @@ The agent job retains read-only GitHub permissions and does not receive `RIVET_A
 
 ## Pinned compiler result
 
-The checked-in source compiles cleanly with gh-aw `v0.86.2` in strict action mode using the pinned actions commit. Inspection of the generated workflow confirms:
+The checked-in source compiled cleanly with gh-aw `v0.86.2` in strict action
+mode using the pinned actions commit. Inspection of the generated workflow
+confirmed:
 
 - the exact-command condition is preserved in activation;
 - the only event is `issue_comment` filtered to pull requests;
@@ -43,15 +48,19 @@ The sequence rejects moved heads, failed commands, no-change repairs, reordered 
 
 This state machine validates receipts supplied by deterministic workflow steps. It does not treat an agent's claim that validation ran as proof.
 
-## Remaining hard gates
+## Remaining qualification hardening
 
 The upstream primitive enforces same-repository targeting, protected paths, patch limits, and non-fast-forward failure. It does not by itself prove that the configured validation commands ran successfully, and prompt instructions are not a deterministic validation gate.
 
-Before repair can be installed, Rivet still needs:
+The historical candidate left these follow-up gates open. They are evidence and
+hardening work for a future qualification update, not prerequisites for the
+explicit repair installation:
 
 1. wire a deterministic validation runner and the lineage state machine into publication;
 2. persist the lineage through a Rivet-owned GitHub marker or check result;
 3. verify live that the Rivet App was widened from Contents read to Contents write; and
-4. enable repair in an installer/update PR only after those checks pass.
+4. re-run these checks for any installer or update PR that changes repair authority.
 
-Until then, review remains the only operational Rivet workflow and repair authority remains disabled in schema v4.
+Until then, review remains the default operational workflow. Repair is an
+explicit owner-authorized upgrade that requires the separate App authority and
+owner command described in the installer documentation.

@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rmdir,
   rm,
@@ -15,6 +16,99 @@ import path from "node:path";
 
 function digest(content) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+function isWithinDirectory(directory, candidate) {
+  const relative = path.relative(directory, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
+async function resolveRepositoryRootRealPath(repositoryRoot) {
+  const absoluteRoot = path.resolve(repositoryRoot);
+  try {
+    const metadata = await lstat(absoluteRoot);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error("Rivet installer: repository root must be a directory");
+    }
+    return realpath(absoluteRoot);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error("Rivet installer: repository root does not exist", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
+async function validateManagedDestination(
+  repositoryRoot,
+  filePath,
+  repositoryRootRealPath,
+) {
+  const absoluteRoot = path.resolve(repositoryRoot);
+  const destination = path.resolve(absoluteRoot, filePath);
+  if (!isWithinDirectory(absoluteRoot, destination)) {
+    throw new Error(
+      `Rivet installer: managed path escapes repository root: ${filePath}`,
+    );
+  }
+
+  const segments = path.relative(absoluteRoot, destination).split(path.sep);
+  let current = absoluteRoot;
+  for (const [index, segment] of segments.entries()) {
+    if (!segment) continue;
+    current = path.join(current, segment);
+    let metadata;
+    try {
+      metadata = await lstat(current);
+    } catch (error) {
+      if (error?.code === "ENOENT") break;
+      throw error;
+    }
+
+    const isLeaf = index === segments.length - 1;
+    if (metadata.isSymbolicLink()) {
+      if (isLeaf) {
+        throw new Error(
+          `Rivet installer: managed path is not a regular file: ${destination}`,
+        );
+      }
+      let resolved;
+      try {
+        resolved = await realpath(current);
+      } catch (error) {
+        throw new Error(
+          `Rivet installer: managed path has an unresolved symlink ancestor: ${current}`,
+          { cause: error },
+        );
+      }
+      if (!isWithinDirectory(repositoryRootRealPath, resolved)) {
+        throw new Error(
+          `Rivet installer: managed path ${filePath} resolves outside repository root through symlink: ${current} -> ${resolved}`,
+        );
+      }
+    } else if (isLeaf && !metadata.isFile()) {
+      throw new Error(
+        `Rivet installer: managed path is not a regular file: ${destination}`,
+      );
+    }
+  }
+}
+
+async function validatePlanDestinations(plan, repositoryRootRealPath) {
+  for (const file of plan.files) {
+    await validateManagedDestination(
+      plan.repositoryRoot,
+      file.path,
+      repositoryRootRealPath,
+    );
+  }
 }
 
 export async function existingFile(filePath) {
@@ -32,9 +126,14 @@ export async function existingFile(filePath) {
   }
 }
 
-async function planStartingState(plan) {
+async function planStartingState(plan, repositoryRootRealPath) {
   const startingState = new Map();
   for (const file of plan.files) {
+    await validateManagedDestination(
+      plan.repositoryRoot,
+      file.path,
+      repositoryRootRealPath,
+    );
     const current = await existingFile(
       path.join(plan.repositoryRoot, file.path),
     );
@@ -63,6 +162,13 @@ async function fileIdentity(filePath) {
 }
 
 async function restoreCapturedFile(mutation, rollbackPath) {
+  const validateDestination = () =>
+    validateManagedDestination(
+      mutation.repositoryRoot,
+      mutation.file.path,
+      mutation.repositoryRootRealPath,
+    );
+  await validateDestination();
   const currentIdentity = await fileIdentity(mutation.destination);
   if (mutation.file.status === "create") {
     if (mutation.installedIdentity === null) return;
@@ -71,15 +177,18 @@ async function restoreCapturedFile(mutation, rollbackPath) {
         `Rivet installer: ${mutation.file.path} changed during rollback`,
       );
     }
+    await validateDestination();
     await rename(mutation.destination, rollbackPath);
     const captured = await readFile(rollbackPath, "utf8");
     if (captured !== mutation.file.content) {
+      await validateDestination();
       await link(rollbackPath, mutation.destination);
       await unlink(rollbackPath);
       throw new Error(
         `Rivet installer: ${mutation.file.path} changed during rollback`,
       );
     }
+    await validateDestination();
     await unlink(rollbackPath);
     return;
   }
@@ -89,9 +198,11 @@ async function restoreCapturedFile(mutation, rollbackPath) {
         `Rivet installer: ${mutation.file.path} changed during rollback`,
       );
     }
+    await validateDestination();
     await rename(mutation.destination, rollbackPath);
     const captured = await readFile(rollbackPath, "utf8");
     if (captured !== mutation.file.content) {
+      await validateDestination();
       await link(rollbackPath, mutation.destination);
       await unlink(rollbackPath);
       throw new Error(
@@ -104,6 +215,7 @@ async function restoreCapturedFile(mutation, rollbackPath) {
     );
   }
   if (mutation.backup) {
+    await validateDestination();
     await link(mutation.backup, mutation.destination);
     await unlink(mutation.backup);
   }
@@ -111,7 +223,11 @@ async function restoreCapturedFile(mutation, rollbackPath) {
 }
 
 export async function applyInstallation(plan, { onProgress } = {}) {
-  const startingState = await planStartingState(plan);
+  const repositoryRoot = path.resolve(plan.repositoryRoot);
+  const repositoryRootRealPath =
+    await resolveRepositoryRootRealPath(repositoryRoot);
+  await validatePlanDestinations(plan, repositoryRootRealPath);
+  const startingState = await planStartingState(plan, repositoryRootRealPath);
   const changedFiles = plan.files.filter(
     ({ status }) => status !== "unchanged",
   );
@@ -120,22 +236,34 @@ export async function applyInstallation(plan, { onProgress } = {}) {
   }
   if (changedFiles.length === 0) return;
   const transactionRoot = await mkdtemp(
-    path.join(plan.repositoryRoot, ".rivet-install-"),
+    path.join(repositoryRoot, ".rivet-install-"),
   );
   const attempted = [];
   try {
     for (const [index, file] of changedFiles.entries()) {
-      const destination = path.join(plan.repositoryRoot, file.path);
+      const destination = path.join(repositoryRoot, file.path);
       const mutation = {
         file,
         destination,
         backup: null,
         installedIdentity: null,
+        repositoryRoot,
+        repositoryRootRealPath,
       };
       attempted.push(mutation);
+      await validateManagedDestination(
+        repositoryRoot,
+        file.path,
+        repositoryRootRealPath,
+      );
       await mkdir(path.dirname(destination), { recursive: true });
       if (file.status !== "create") {
         const backup = path.join(transactionRoot, `${index}.backup`);
+        await validateManagedDestination(
+          repositoryRoot,
+          file.path,
+          repositoryRootRealPath,
+        );
         await rename(destination, backup);
         mutation.backup = backup;
         const captured = await readFile(mutation.backup, "utf8");
@@ -148,6 +276,11 @@ export async function applyInstallation(plan, { onProgress } = {}) {
       if (file.status === "delete") continue;
       const temporary = path.join(transactionRoot, `${index}.content`);
       await writeFile(temporary, file.content, { flag: "wx", mode: 0o644 });
+      await validateManagedDestination(
+        repositoryRoot,
+        file.path,
+        repositoryRootRealPath,
+      );
       await link(temporary, destination);
       await unlink(temporary);
       mutation.installedIdentity = await fileIdentity(destination);

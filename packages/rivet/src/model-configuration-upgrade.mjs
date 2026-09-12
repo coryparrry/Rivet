@@ -12,12 +12,17 @@ function installedReviewShape(source) {
   if (!frontmatter) return null;
   const document = parseDocument(frontmatter[1], { uniqueKeys: true });
   if (document.errors.length) return null;
-  const value = document.toJS({ maxAliasCount: 0 });
+  let value;
+  try {
+    value = document.toJS({ maxAliasCount: 0 });
+  } catch {
+    // Alias resolution failures make the previous installation unrecognized.
+    return null;
+  }
   const safeOutputs = value["safe-outputs"];
   const inline = safeOutputs?.["create-pull-request-review-comment"];
-  const allowedEvents = safeOutputs?.["submit-pull-request-review"]?.[
-    "allowed-events"
-  ];
+  const allowedEvents =
+    safeOutputs?.["submit-pull-request-review"]?.["allowed-events"];
   const model = {
     engine: typeof value.engine === "string" ? value.engine : value.engine?.id,
     model: value.model,
@@ -40,7 +45,8 @@ function installedReviewShape(source) {
       automatic: true,
       inlineFindings: Boolean(inline),
       requestChanges:
-        Array.isArray(allowedEvents) && allowedEvents.includes("REQUEST_CHANGES"),
+        Array.isArray(allowedEvents) &&
+        allowedEvents.includes("REQUEST_CHANGES"),
       maximumFindings: Number.isInteger(inline?.max) ? inline.max : null,
     },
     issueTriage: Boolean(safeOutputs?.["create-issue"]),

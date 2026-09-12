@@ -101,8 +101,8 @@ Set `models.review` in `.github/rivet.json` to your model and endpoint:
 
 Keep the other configuration fields. Store the key with
 `gh secret set DEEPSEEK_API_KEY`, inspect the changes with
-`rivet init --review-only --dry-run`, then apply them with
-`rivet init --review-only` and commit the configuration and generated files
+`npx @coryparry/rivet init --review-only --dry-run`, then apply them with
+`npx @coryparry/rivet init --review-only` and commit the configuration and generated files
 together. To use `--setup-pr`, first merge the configuration into the default
 branch and synchronize the local checkout to that exact remote commit.
 Use `--repair` for an existing repair installation. Guided setup also
@@ -126,6 +126,12 @@ npx @coryparry/rivet app-configure --repository OWNER/REPOSITORY \
 npx @coryparry/rivet app-verify --repository OWNER/REPOSITORY \
   --client-id CLIENT_ID --private-key-file /path/to/private-key.pem
 ```
+
+`--repository OWNER/REPOSITORY` is required and identifies the GitHub target.
+App commands load an existing `.github/rivet.json` from the current checkout so
+their authority reflects settings such as disabled issue triage. Use the
+optional `--repository-root /path/to/repository` to select another checkout.
+The root option does not replace the GitHub repository identity.
 
 For explicit modes, use `init --review-only` or `init --repair`. Add
 `--dry-run` to preview, `--setup-pr` to create a verified draft setup PR, or

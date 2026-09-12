@@ -33,8 +33,9 @@ The installer converts these controls into a product-authority summary before
 rendering. The compiled workflow is then inspected separately and must remain
 within that declared authority.
 
-`review.automatic` includes Rivet's fixed review-state labels. An eligible run
-first applies `review needed`. Successful review publication then selects one
+`review.automatic` is fixed to `true` because every supported installation runs
+review automatically. It includes Rivet's fixed review-state labels. An eligible
+run first applies `review needed`. Successful review publication then selects one
 of `changes required`, `review needed`, or `merge ready`, with `needs tests`
 only for a concrete missing deterministic test. These names and transitions are
 product behavior rather than additional schema fields, and labels outside this
@@ -107,14 +108,14 @@ steering are disabled. Review, issue triage, enabled maintenance and
 owner-authorized repair use the custom endpoint and configured model.
 
 Store the key using `gh secret set DEEPSEEK_API_KEY`, then run
-`rivet init --review-only --dry-run` to inspect the workflow changes.
-Run `rivet init --review-only` to apply them locally, and commit the configuration
+`npx @coryparry/rivet init --review-only --dry-run` to inspect the workflow changes.
+Run `npx @coryparry/rivet init --review-only` to apply them locally, and commit the configuration
 and generated files together. Use the corresponding `--repair` commands for an
 existing repair installation.
 For the setup-PR route, first merge the configuration into the default branch
 and synchronize the local checkout to that exact remote commit, then run
-`rivet init --review-only --setup-pr`.
-Guided `rivet init` also recognizes and can store the configured secret.
+`npx @coryparry/rivet init --review-only --setup-pr`.
+Guided `npx @coryparry/rivet init` also recognizes and can store the configured secret.
 Changing or removing the endpoint regenerates recognized managed workflows;
 unrecognized local workflow modifications still block an overwrite.
 

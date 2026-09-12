@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { replaceAuthorityDeclarations } from "../scripts/refresh-review-authority.mjs";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import {
+  refreshReviewAuthority,
+  replaceAuthorityDeclarations,
+} from "../scripts/refresh-review-authority.mjs";
+
+const execFileAsync = promisify(execFile);
+const refreshReviewAuthorityPath = fileURLToPath(
+  new URL("../scripts/refresh-review-authority.mjs", import.meta.url),
+);
 
 const ENGINES = ["claude", "codex", "copilot", "gemini"];
 const hash = (character) => character.repeat(64);
@@ -19,9 +33,6 @@ const reviewDeclaration = (character) => {
     .map((key) => `  "${key}": "${hash(character)}",`)
     .join("\n")}\n});`;
 };
-const scalarDeclaration = (name, character) =>
-  `export const ${name} =\n  "${hash(character)}";`;
-
 function declarations(character) {
   return {
     RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY: reviewDeclaration(character),
@@ -29,16 +40,16 @@ function declarations(character) {
       "RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE",
       character,
     ),
-    RIVET_MAINTENANCE_ACTIONS_SHA256: scalarDeclaration(
-      "RIVET_MAINTENANCE_ACTIONS_SHA256",
+    RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE: engineDeclaration(
+      "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
       character,
     ),
-    RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256: scalarDeclaration(
-      "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256",
+    RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE: engineDeclaration(
+      "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
       character,
     ),
-    RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256: scalarDeclaration(
-      "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256",
+    RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE: engineDeclaration(
+      "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
       character,
     ),
     RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE: engineDeclaration(
@@ -54,7 +65,10 @@ test("replaces every generated authority declaration as one validated set", () =
   const replacements = declarations("b");
   const updated = replaceAuthorityDeclarations(source, replacements);
 
-  assert.equal(updated, `before\n${Object.values(replacements).join("\n")}\nafter\n`);
+  assert.equal(
+    updated,
+    `before\n${Object.values(replacements).join("\n")}\nafter\n`,
+  );
 });
 
 test("refuses incomplete, malformed, or duplicate authority inventories", () => {
@@ -68,8 +82,8 @@ test("refuses incomplete, malformed, or duplicate authority inventories", () => 
   );
 
   const malformed = declarations("b");
-  malformed.RIVET_MAINTENANCE_ACTIONS_SHA256 =
-    "export const RIVET_MAINTENANCE_ACTIONS_SHA256 = \"not-a-digest\";";
+  malformed.RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE =
+    'export const RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE = "not-a-digest";';
   assert.throws(
     () => replaceAuthorityDeclarations(source, malformed),
     /must occur exactly once/,
@@ -83,4 +97,96 @@ test("refuses incomplete, malformed, or duplicate authority inventories", () => 
       ),
     /must occur exactly once/,
   );
+});
+
+test("compiles maintenance in both modes for every supported engine", async () => {
+  const temporaryParent = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-refresh-authority-test-"),
+  );
+  const maintenanceVariants = [];
+  const source = Object.values(declarations("a")).join("\n");
+  let updated;
+  try {
+    await refreshReviewAuthority({
+      temporaryParent,
+      ensureBinary: async () => "pinned-gh-aw",
+      readTrust: async () => source,
+      writeTrust: async (_path, value) => {
+        updated = value;
+      },
+      compileWorkflow: async ({ repositoryRoot, workflowId }) => {
+        const workflowPath = path.join(
+          repositoryRoot,
+          ".github",
+          "workflows",
+          `${workflowId}.md`,
+        );
+        const workflow = await readFile(workflowPath, "utf8");
+        if (workflowId === "rivet-maintenance") {
+          maintenanceVariants.push({
+            engine: workflow.match(/^engine: (.+)$/m)?.[1],
+            mode: workflow.includes('cron: "17 3 * * 1"')
+              ? "scheduled"
+              : "manual",
+          });
+        }
+        await writeFile(
+          path.join(
+            repositoryRoot,
+            ".github",
+            "workflows",
+            `${workflowId}.lock.yml`,
+          ),
+          "compiled",
+        );
+      },
+      validateWorkflow: async () => {},
+      inspectWorkflow: () => ({}),
+      write: true,
+    });
+  } finally {
+    await rm(temporaryParent, { recursive: true, force: true });
+  }
+
+  assert.ok(updated);
+  assert.deepEqual(maintenanceVariants, [
+    { engine: "claude", mode: "manual" },
+    { engine: "claude", mode: "scheduled" },
+    { engine: "codex", mode: "manual" },
+    { engine: "codex", mode: "scheduled" },
+    { engine: "copilot", mode: "manual" },
+    { engine: "copilot", mode: "scheduled" },
+    { engine: "gemini", mode: "manual" },
+    { engine: "gemini", mode: "scheduled" },
+  ]);
+  for (const name of [
+    "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
+    "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
+    "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
+  ]) {
+    assert.match(updated, new RegExp(`${name} = Object\\.freeze\\({`));
+  }
+});
+
+test("runs the refresh-review-authority CLI when invoked through a symlink", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-refresh-authority-cli-"),
+  );
+  try {
+    const alias = path.join(directory, "refresh-review-authority.mjs");
+    await symlink(refreshReviewAuthorityPath, alias);
+    await assert.rejects(
+      execFileAsync(process.execPath, [alias, "--unexpected"]),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(
+          error.stderr,
+          /usage: refresh-review-authority\.mjs \[--write\]/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

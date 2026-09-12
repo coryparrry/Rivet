@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import { unlinkSync, writeFileSync } from "node:fs";
 import {
   access,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -139,7 +141,10 @@ test("does not overwrite an in-place edit during rollback", async (t) => {
 
   let recoveryPath;
   await assert.rejects(applyInstallation(plan), (error) => {
-    assert.match(error.message, /installation failed and rollback was incomplete/);
+    assert.match(
+      error.message,
+      /installation failed and rollback was incomplete/,
+    );
     assert.match(error.message, /recovery files preserved at/);
     assert.equal(typeof error.recoveryPath, "string");
     recoveryPath = error.recoveryPath;
@@ -220,4 +225,149 @@ test("cleans its transaction after a concurrent delete", async (t) => {
     { code: "ENOENT" },
   );
   assert.deepEqual(await readdir(repositoryRoot), []);
+});
+
+test("rejects a managed destination whose ancestor escapes through a symlink", async (t) => {
+  const repositoryRoot = await repository(t);
+  const outsideRoot = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-apply-outside-"),
+  );
+  t.after(() => rm(outsideRoot, { recursive: true, force: true }));
+  await symlink(outsideRoot, path.join(repositoryRoot, ".github"), "dir");
+
+  await assert.rejects(
+    applyInstallation({
+      repositoryRoot,
+      files: [
+        {
+          path: ".github/workflow.yml",
+          status: "create",
+          previousSha256: null,
+          content: "managed workflow\n",
+        },
+      ],
+    }),
+    /resolves outside repository root through symlink/,
+  );
+  await assert.rejects(access(path.join(outsideRoot, "workflow.yml")), {
+    code: "ENOENT",
+  });
+});
+
+test("rejects a managed leaf symlink", async (t) => {
+  const repositoryRoot = await repository(t);
+  const outsideRoot = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-apply-outside-"),
+  );
+  t.after(() => rm(outsideRoot, { recursive: true, force: true }));
+  const destination = path.join(repositoryRoot, "managed.txt");
+  const target = path.join(outsideRoot, "target.txt");
+  await writeFile(target, "target bytes\n");
+  await symlink(target, destination);
+
+  await assert.rejects(
+    applyInstallation({
+      repositoryRoot,
+      files: [
+        {
+          path: "managed.txt",
+          status: "update",
+          previousSha256: sha256("target bytes\n"),
+          content: "replacement bytes\n",
+        },
+      ],
+    }),
+    /managed path is not a regular file/,
+  );
+  assert.equal(await readFile(target, "utf8"), "target bytes\n");
+});
+
+test("rejects a managed leaf directory", async (t) => {
+  const repositoryRoot = await repository(t);
+  const destination = path.join(repositoryRoot, "managed.txt");
+  await mkdir(destination);
+
+  await assert.rejects(
+    applyInstallation({
+      repositoryRoot,
+      files: [
+        {
+          path: "managed.txt",
+          status: "update",
+          previousSha256: sha256("before\n"),
+          content: "replacement\n",
+        },
+      ],
+    }),
+    /managed path is not a regular file/,
+  );
+});
+
+test("rolls back a successfully created file after a later mutation fails", async (t) => {
+  const repositoryRoot = await repository(t);
+  const createdPath = path.join(repositoryRoot, "created.txt");
+  await assert.rejects(
+    applyInstallation({
+      repositoryRoot,
+      files: [
+        {
+          path: "created.txt",
+          status: "create",
+          previousSha256: null,
+          content: "created bytes\n",
+        },
+        {
+          path: "invalid.txt",
+          status: "create",
+          previousSha256: null,
+          content: undefined,
+        },
+      ],
+    }),
+    TypeError,
+  );
+  await assert.rejects(access(createdPath), { code: "ENOENT" });
+});
+
+test("preserves a concurrent replacement when a created file changes during rollback", async (t) => {
+  const repositoryRoot = await repository(t);
+  const createdPath = path.join(repositoryRoot, "created.txt");
+  const failingFile = {
+    path: "invalid.txt",
+    status: "create",
+    previousSha256: null,
+    get content() {
+      unlinkSync(createdPath);
+      writeFileSync(createdPath, "concurrent replacement\n");
+      return undefined;
+    },
+  };
+
+  await assert.rejects(
+    applyInstallation({
+      repositoryRoot,
+      files: [
+        {
+          path: "created.txt",
+          status: "create",
+          previousSha256: null,
+          content: "created bytes\n",
+        },
+        failingFile,
+      ],
+    }),
+    (error) => {
+      assert.match(
+        error.message,
+        /installation failed and rollback was incomplete/,
+      );
+      assert.ok(
+        error.errors.some((rollbackError) =>
+          /changed during rollback/.test(rollbackError.message),
+        ),
+      );
+      return true;
+    },
+  );
+  assert.equal(await readFile(createdPath, "utf8"), "concurrent replacement\n");
 });

@@ -7,6 +7,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,14 +40,17 @@ const REPAIR_VALIDATION_COMMANDS = Object.freeze(["npm test"]);
 const AUTHORITY_DECLARATION_NAMES = Object.freeze([
   "RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY",
   "RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE",
-  "RIVET_MAINTENANCE_ACTIONS_SHA256",
-  "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256",
-  "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256",
+  "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
   "RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE",
 ]);
 const OBJECT_DECLARATION_NAMES = new Set([
   "RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY",
   "RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
+  "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
   "RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE",
 ]);
 const AGENT_ASSET_ROOT = new URL("../assets/agents/", import.meta.url);
@@ -94,10 +98,7 @@ function authorityDeclarationPattern(name) {
         `^export const ${escaped} = Object\\.freeze\\((?:\\{\\}|\\{\\n(?:  [^\\r\\n]+\\n)*\\})\\);$`,
         "gm",
       )
-    : new RegExp(
-        `^export const ${escaped} =\\n  "[^"\\r\\n]*";$`,
-        "gm",
-      );
+    : new RegExp(`^export const ${escaped} =\\n  "[^"\\r\\n]*";$`, "gm");
 }
 
 function locateAuthorityDeclaration(source, name) {
@@ -120,7 +121,9 @@ function locateAuthorityDeclaration(source, name) {
 
 function validateAuthorityReplacement(name, replacement) {
   if (typeof replacement !== "string") {
-    throw new Error(`authority replacement ${name} must be a declaration string`);
+    throw new Error(
+      `authority replacement ${name} must be a declaration string`,
+    );
   }
   const located = locateAuthorityDeclaration(replacement, name);
   if (located.start !== 0 || located.end !== replacement.length) {
@@ -130,7 +133,9 @@ function validateAuthorityReplacement(name, replacement) {
   }
   const expectedKind = OBJECT_DECLARATION_NAMES.has(name) ? "engine" : "scalar";
   if (located.kind !== expectedKind) {
-    throw new Error(`authority replacement ${name} has the wrong declaration shape`);
+    throw new Error(
+      `authority replacement ${name} has the wrong declaration shape`,
+    );
   }
 }
 
@@ -226,32 +231,29 @@ function reviewPolicyDeclaration(hashes) {
   }
   const name = "RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY";
   return `export const ${name} = Object.freeze({\n${expectedKeys
-    .map((key) => `  "${key}": "${digestValue(hashes[key], `${name}.${key}`)}",`)
+    .map(
+      (key) => `  "${key}": "${digestValue(hashes[key], `${name}.${key}`)}",`,
+    )
     .join("\n")}\n});`;
-}
-
-function scalarDeclaration(name, hash) {
-  return `export const ${name} =\n  "${digestValue(hash, name)}";`;
 }
 
 function authorityDeclarations({ review, issueTriage, maintenance, repair }) {
   return {
-    RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY:
-      reviewPolicyDeclaration(review),
+    RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY: reviewPolicyDeclaration(review),
     RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE: engineDeclaration(
       "RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE",
       issueTriage,
     ),
-    RIVET_MAINTENANCE_ACTIONS_SHA256: scalarDeclaration(
-      "RIVET_MAINTENANCE_ACTIONS_SHA256",
+    RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE: engineDeclaration(
+      "RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE",
       maintenance.actions,
     ),
-    RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256: scalarDeclaration(
-      "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256",
+    RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE: engineDeclaration(
+      "RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE",
       maintenance.jobConditions,
     ),
-    RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256: scalarDeclaration(
-      "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256",
+    RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE: engineDeclaration(
+      "RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE",
       maintenance.jobAuthority,
     ),
     RIVET_REPAIR_AUTHORITY_SHA256_BY_ENGINE: engineDeclaration(
@@ -401,30 +403,50 @@ async function generateMaintenanceInventory({
   validateWorkflow,
   inspectWorkflow,
 }) {
-  let normalized;
-  for (const mode of ["manual", "scheduled"]) {
-    const configuration = workflowConfiguration("codex");
-    configuration.maintenance.mode = mode;
-    const authority = await inspectGeneratedWorkflow({
-      descriptor: WORKFLOW_ASSETS.maintenance,
-      configuration,
-      render: renderRivetMaintenanceWorkflow,
-      binaryPath,
-      temporaryParent,
-      compileWorkflow,
-      validateWorkflow,
-      inspectWorkflow,
-    });
-    const digests = maintenanceAuthorityDigests(authority);
-    if (!normalized) {
-      normalized = digests;
-    } else if (JSON.stringify(digests) !== JSON.stringify(normalized)) {
-      throw new Error(
-        "manual and scheduled maintenance authority inventories are incompatible",
-      );
+  const inventories = {};
+  for (const engine of AUTHORITY_ENGINES) {
+    let normalized;
+    for (const mode of ["manual", "scheduled"]) {
+      const configuration = workflowConfiguration(engine);
+      configuration.maintenance.mode = mode;
+      const authority = await inspectGeneratedWorkflow({
+        descriptor: WORKFLOW_ASSETS.maintenance,
+        configuration,
+        render: renderRivetMaintenanceWorkflow,
+        binaryPath,
+        temporaryParent,
+        compileWorkflow,
+        validateWorkflow,
+        inspectWorkflow,
+      });
+      const digests = maintenanceAuthorityDigests(authority);
+      if (!normalized) {
+        normalized = digests;
+      } else if (JSON.stringify(digests) !== JSON.stringify(normalized)) {
+        throw new Error(
+          `manual and scheduled maintenance authority inventories are incompatible for ${engine}`,
+        );
+      }
     }
+    inventories[engine] = normalized;
   }
-  return normalized;
+  return {
+    actions: Object.fromEntries(
+      AUTHORITY_ENGINES.map((engine) => [engine, inventories[engine].actions]),
+    ),
+    jobConditions: Object.fromEntries(
+      AUTHORITY_ENGINES.map((engine) => [
+        engine,
+        inventories[engine].jobConditions,
+      ]),
+    ),
+    jobAuthority: Object.fromEntries(
+      AUTHORITY_ENGINES.map((engine) => [
+        engine,
+        inventories[engine].jobAuthority,
+      ]),
+    ),
+  };
 }
 
 async function generateRepairInventory({
@@ -512,15 +534,22 @@ export async function refreshReviewAuthority({
   );
   if (write) await writeTrust(trustPath, updated);
   else if (updated !== original)
-    throw new Error(
-      "authority inventories differ from pinned compiler output",
-    );
+    throw new Error("authority inventories differ from pinned compiler output");
 }
 
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const args = process.argv.slice(2);
   if (args.some((arg) => arg !== "--write") || args.length > 1)
     fail("usage: refresh-review-authority.mjs [--write]");

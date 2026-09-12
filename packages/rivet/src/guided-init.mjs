@@ -5,7 +5,6 @@ import {
   repositoryProbeEnvironment,
 } from "./guided-environment.mjs";
 import path from "node:path";
-import { createInterface } from "node:readline/promises";
 import { configureReviewApp, verifyReviewApp } from "./app-setup.mjs";
 import {
   reviewAppAuthority,
@@ -19,10 +18,14 @@ import {
   repositoryFromGitHubOrigin,
   REVIEW_SETUP_BRANCH,
 } from "./setup-pr.mjs";
+import {
+  GuidedInitCancelledError,
+  runCommand,
+  selectModelSecret,
+  terminalPrompt,
+} from "./guided-prompt.mjs";
 
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const MAX_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024;
-
 function write(stdout, message) {
   stdout.write(`${message}\n`);
 }
@@ -45,64 +48,6 @@ function validRepository(repository) {
       .split("/")
       .every((segment) => segment !== "." && segment !== "..")
   );
-}
-
-async function runCommand(command, args, options = {}) {
-  const { cwd, env, input, inheritStdin = false } = options;
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      stdio: inheritStdin ? "inherit" : ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let outputBytes = 0;
-    let settled = false;
-    if (!inheritStdin) {
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      const collect = (destination) => (chunk) => {
-        outputBytes += Buffer.byteLength(chunk);
-        if (outputBytes > MAX_COMMAND_OUTPUT_BYTES) {
-          if (!settled) {
-            settled = true;
-            child.kill();
-            reject(
-              new Error(
-                `${command} ${args[0] ?? ""} output exceeded the limit`,
-              ),
-            );
-          }
-          return;
-        }
-        if (destination === "stdout") stdout += chunk;
-        else stderr += chunk;
-      };
-      child.stdout.on("data", collect("stdout"));
-      child.stderr.on("data", collect("stderr"));
-    }
-    child.once("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error);
-      }
-    });
-    child.once("close", (code) => {
-      if (settled) return;
-      settled = true;
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(
-          new Error(
-            `${command} ${args[0] ?? ""} failed${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
-          ),
-        );
-      }
-    });
-    if (!inheritStdin) child.stdin.end(input);
-  });
 }
 
 async function configuredModelSecret({
@@ -139,26 +84,6 @@ async function configuredModelSecret({
   return modelSecrets.find((name) =>
     secrets.some((secret) => secret?.name === name),
   );
-}
-
-function terminalPrompt({ stdin, stdout }) {
-  async function question(message) {
-    const readline = createInterface({ input: stdin, output: stdout });
-    try {
-      return await readline.question(message);
-    } finally {
-      readline.close();
-    }
-  }
-  return Object.freeze({
-    async confirm(message) {
-      const answer = (await question(`${message} [y/N] `)).trim().toLowerCase();
-      return answer === "y" || answer === "yes";
-    },
-    async input(message) {
-      return question(`${message} `);
-    },
-  });
 }
 
 async function openInBrowser(url, platform, env, spawnImpl) {
@@ -432,22 +357,27 @@ function cancelled({ stage, preflightResult, registrationUrl, authority }) {
   });
 }
 
-async function selectModelSecret(prompt) {
-  if (typeof prompt.selectModelSecret === "function") {
-    const selected = await prompt.selectModelSecret(MODEL_SECRETS);
-    if (MODEL_SECRETS.includes(selected)) return selected;
-  } else {
-    const selected = (
-      await prompt.input(
-        "Model secret to store [CODEX_API_KEY] (or OPENAI_API_KEY):",
-      )
-    )
-      .trim()
-      .toUpperCase();
-    if (!selected) return "CODEX_API_KEY";
-    if (MODEL_SECRETS.includes(selected)) return selected;
+async function promptOrCancel({
+  promptAction,
+  stage,
+  preflightResult,
+  registrationUrl,
+  authority,
+  stdout,
+}) {
+  try {
+    return await promptAction();
+  } catch (error) {
+    if (!(error instanceof GuidedInitCancelledError)) throw error;
+    const result = cancelled({
+      stage,
+      preflightResult,
+      registrationUrl,
+      authority,
+    });
+    write(stdout, result.guidance);
+    return result;
   }
-  throw new Error("Rivet init: choose CODEX_API_KEY or OPENAI_API_KEY");
 }
 
 async function setModelSecret({
@@ -560,7 +490,7 @@ export async function runGuidedInit(options = {}) {
         "Rivet init: interactive setup requires a TTY; use explicit CLI flags instead",
       );
     }
-    prompt = terminalPrompt(stdio);
+    prompt = terminalPrompt({ ...stdio, signal: options.signal });
   }
   if (
     typeof prompt.confirm !== "function" ||
@@ -625,9 +555,19 @@ export async function runGuidedInit(options = {}) {
     );
   }
 
-  if (
-    !(await prompt.confirm("Continue with the review-only GitHub App setup?"))
-  ) {
+  const registrationConfirmation = await promptOrCancel({
+    promptAction: () =>
+      prompt.confirm("Continue with the review-only GitHub App setup?"),
+    stage: "app-registration",
+    preflightResult,
+    registrationUrl,
+    authority,
+    stdout,
+  });
+  if (registrationConfirmation?.status === "cancelled") {
+    return registrationConfirmation;
+  }
+  if (!registrationConfirmation) {
     const result = cancelled({
       stage: "app-registration",
       preflightResult,
@@ -637,12 +577,29 @@ export async function runGuidedInit(options = {}) {
     write(stdout, result.guidance);
     return result;
   }
-  const clientId = required(
-    await prompt.input("GitHub App client ID:"),
-    "GitHub App client ID",
-  );
+  const clientIdAnswer = await promptOrCancel({
+    promptAction: () => prompt.input("GitHub App client ID:"),
+    stage: "app-registration",
+    preflightResult,
+    registrationUrl,
+    authority,
+    stdout,
+  });
+  if (clientIdAnswer?.status === "cancelled") return clientIdAnswer;
+  const clientId = required(clientIdAnswer, "GitHub App client ID");
+  const privateKeyPathAnswer = await promptOrCancel({
+    promptAction: () => prompt.input("Path to the GitHub App private-key PEM:"),
+    stage: "app-registration",
+    preflightResult,
+    registrationUrl,
+    authority,
+    stdout,
+  });
+  if (privateKeyPathAnswer?.status === "cancelled") {
+    return privateKeyPathAnswer;
+  }
   const privateKeyPath = required(
-    await prompt.input("Path to the GitHub App private-key PEM:"),
+    privateKeyPathAnswer,
     "GitHub App private-key PEM path",
   );
   await assertPreflightStillCurrent({
@@ -674,9 +631,19 @@ export async function runGuidedInit(options = {}) {
       "Could not open a browser; use the printed installation URL.",
     );
   }
-  if (
-    !(await prompt.confirm("Installed it on only the selected repository?"))
-  ) {
+  const installationConfirmation = await promptOrCancel({
+    promptAction: () =>
+      prompt.confirm("Installed it on only the selected repository?"),
+    stage: "app-installation",
+    preflightResult,
+    registrationUrl,
+    authority,
+    stdout,
+  });
+  if (installationConfirmation?.status === "cancelled") {
+    return installationConfirmation;
+  }
+  if (!installationConfirmation) {
     const result = cancelled({
       stage: "app-installation",
       preflightResult,
@@ -709,14 +676,39 @@ export async function runGuidedInit(options = {}) {
     preflightResult.existingModelSecret ??
     environmentModelSecret ??
     endpoint?.apiKeySecret ??
-    (await selectModelSecret(prompt));
+    undefined;
+  let selectedModelSecret = modelSecret;
+  if (!selectedModelSecret) {
+    selectedModelSecret = await promptOrCancel({
+      promptAction: () => selectModelSecret(prompt),
+      stage: "setup-pull-request",
+      preflightResult,
+      registrationUrl,
+      authority,
+      stdout,
+    });
+    if (selectedModelSecret?.status === "cancelled") {
+      return selectedModelSecret;
+    }
+  }
   const modelSecretAlreadyConfigured = Boolean(
     preflightResult.existingModelSecret,
   );
   const finalAction = modelSecretAlreadyConfigured
     ? "create the verified draft setup pull request"
-    : `store ${modelSecret} and create the verified draft setup pull request`;
-  if (!(await prompt.confirm(`Ready to ${finalAction}?`))) {
+    : `store ${selectedModelSecret} and create the verified draft setup pull request`;
+  const finalConfirmation = await promptOrCancel({
+    promptAction: () => prompt.confirm(`Ready to ${finalAction}?`),
+    stage: "setup-pull-request",
+    preflightResult,
+    registrationUrl,
+    authority,
+    stdout,
+  });
+  if (finalConfirmation?.status === "cancelled") {
+    return finalConfirmation;
+  }
+  if (!finalConfirmation) {
     const result = cancelled({
       stage: "setup-pull-request",
       preflightResult,
@@ -739,7 +731,7 @@ export async function runGuidedInit(options = {}) {
       repository: preflightResult.repository,
       repositoryRoot: preflightResult.repositoryRoot,
       env,
-      name: modelSecret,
+      name: selectedModelSecret,
       secretInput:
         secretInput ??
         (environmentModelSecret
@@ -771,7 +763,7 @@ export async function runGuidedInit(options = {}) {
       permissions: verifiedApp.permissions,
     }),
     modelSecret: Object.freeze({
-      name: modelSecret,
+      name: selectedModelSecret,
       action: modelSecretAlreadyConfigured ? "already-configured" : "stored",
     }),
     setupPullRequest: Object.freeze({

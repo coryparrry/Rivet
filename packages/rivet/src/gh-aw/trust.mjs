@@ -7,6 +7,15 @@ import {
   reviewInlineLimit,
   sameValues,
 } from "./authority-inventory.mjs";
+import {
+  isApprovedMaintenanceEngine,
+  issueTriageSecrets,
+  maintenanceDigestForEngine,
+  maintenanceSecrets,
+  RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE,
+  RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE,
+  RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE,
+} from "./maintenance-trust-inventory.mjs";
 
 export {
   issueTriageAuthorityDigest,
@@ -14,61 +23,77 @@ export {
   repairAuthorityDigest,
   reviewAuthorityDigest,
 } from "./authority-inventory.mjs";
+export {
+  RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE,
+  RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE,
+  RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE,
+} from "./maintenance-trust-inventory.mjs";
 
-const MAINTENANCE_SHARED_SECRETS = [
-  "COPILOT_GITHUB_TOKEN",
-  "GH_AW_GITHUB_MCP_SERVER_TOKEN",
-  "GH_AW_GITHUB_TOKEN",
-  "GITHUB_TOKEN",
-];
-const MAINTENANCE_PROVIDER_SECRETS = Object.freeze({
-  codex: ["CODEX_API_KEY", "OPENAI_API_KEY"],
-  claude: ["ANTHROPIC_API_KEY"],
-  copilot: [],
-  gemini: ["GEMINI_API_KEY"],
-});
-
-// These hashes bind the complete compiled shape produced by the pinned gh-aw
-// release. They are intentionally not derived from the candidate authority.
-export const RIVET_MAINTENANCE_ACTIONS_SHA256 =
-  "ad7df34683b3ab83e39cb0fce683600ce04877c42d4d80778def9d58d25c1ad5";
-export const RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256 =
-  "dcb9f93ac56879b15276b6cb780245b284ea25590ee5e299f7174063a80c3291";
-export const RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256 =
-  "74b5d1f0163c93c16b6a7a44aee902ba4f529433bdc0a08748cfad74184771dc";
 export const RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY = Object.freeze({
-  "automatic:inline:comment:claude": "7cc743b25c7c0cdf43ade70e2149022936e2b4ebb1b77661250dcc1a3443967c",
-  "automatic:inline:comment:codex": "b1bc2f7bda95db2bf6097785f2a1c92f3c6652d04493934b56ad9f9e2a8d8a30",
-  "automatic:inline:comment:copilot": "1e110874f79c4f371920a52d40f8dae109d0f40f1acf6e458d06bb4f0a7bcce8",
-  "automatic:inline:comment:gemini": "97706bc2e8c88b6dee1e2f2eab2c28459d5edcc97d7493baf53a0cfaffc6ce35",
-  "automatic:inline:request-changes:claude": "6a125fe56ff8035321f0507e405462be4673879c50b2222d7fcaac1b3318c2c0",
-  "automatic:inline:request-changes:codex": "4422e4a688ede8c0b2691d03ac2ecf744c9c0215089c44eb927f5a2f5ce2b6b6",
-  "automatic:inline:request-changes:copilot": "5b447c3bf391b83663831898bc4e1551a8c62b4aa21a2baec54295192ea98efa",
-  "automatic:inline:request-changes:gemini": "79b1229b684f6b626c1e66de3eb4d7e197ab15da39c661e36079d4cdb4d43578",
-  "automatic:summary:comment:claude": "aebb4a08fa91ab035c32d1e80e0b893ebc678c04982ea3640ed8be2dde9b401e",
-  "automatic:summary:comment:codex": "16b9a892730f9639ff5ec3634c7f7922264b232c9a26f7e1ac4550048d2fae2d",
-  "automatic:summary:comment:copilot": "d517db18999f03c1670c9e46792422438fb97245824df989f67468fe30812e8b",
-  "automatic:summary:comment:gemini": "41972c22110d520b2ecce5bfc7a317b23f9bac4107e0ca29286d952a51e12e27",
-  "automatic:summary:request-changes:claude": "b92e6f9c513fd0c0ca4b51bf51062698a43abb39d2341c7bd32c02ffaff433dd",
-  "automatic:summary:request-changes:codex": "99bf29e6d40293eca9d5a6fd2d4e024deb27d966db1babce823fe021fed3a3ed",
-  "automatic:summary:request-changes:copilot": "6ff2a3e9540978c718bf5af3dbad437d58f9478d60636d01281435be272e52e3",
-  "automatic:summary:request-changes:gemini": "e6079c7bf6b0370105f4d3aa5f6e336e40b9995f721676d1204bc98f245c07da",
-  "disabled:inline:comment:claude": "f22e77599124bae180b6b5f9a99ad1a131c077c9955835ddfc4d4feeb097aeb3",
-  "disabled:inline:comment:codex": "1dc30f02c0ea69e04eb4969e8f61ab658b94d794ff35c2ae36dd566289e4b963",
-  "disabled:inline:comment:copilot": "9e1a8ddcc587deeaddcf9c376b78a462cb23b42e67317982fa20dd9a303cc7fa",
-  "disabled:inline:comment:gemini": "fa82a186f35f9cbc3e1d6afe475470f8affec3e2e949e121237fd032098d68c9",
-  "disabled:inline:request-changes:claude": "0ca2cc56137875929186c2deee01fa1e247555399814c7e99184eb22db1e189a",
-  "disabled:inline:request-changes:codex": "923d32f878da7052d5f4e52c1a9791a54d98fe1c65bdb36eebb2ff6895d257ec",
-  "disabled:inline:request-changes:copilot": "a34cb2c8dc7fc4165a4b99f3a4ac7c548226af2422f3ff39808bd5987cd96ed4",
-  "disabled:inline:request-changes:gemini": "1a6fbd37936f6333593182b02da36ef51396012eb5544015c0c1d58ba663255f",
-  "disabled:summary:comment:claude": "dc59b76a32dffa4aaae0cba6fa9bf923b26c56c0a82412540ebda0733b8a36f6",
-  "disabled:summary:comment:codex": "b2ed457ad38f56728c75fb9f5f5311a36434e1b20310068465bbf26209fd4006",
-  "disabled:summary:comment:copilot": "892a52a7a25ea11f70429772e1e3523eeddbbcbb3d22a1017e4e4d6717bbdf7f",
-  "disabled:summary:comment:gemini": "abfff3bab0030b9c1cee1eb4285119f75098027a42ed682b980014e01626bcfe",
-  "disabled:summary:request-changes:claude": "c28b6222bbf4015f79daac593ab2200c93a2fa90432da0895b24e1808613e926",
-  "disabled:summary:request-changes:codex": "676a53207523740b0094031ca5374c87bffae966968e3c0614cc439f6387edbf",
-  "disabled:summary:request-changes:copilot": "77412932374371d032647656755525bfb610ef330402199ca78d71d7fc72e5f3",
-  "disabled:summary:request-changes:gemini": "4271c5a22d2e6863f95c69a3c53354c2be41d56def3af2a6d3b00c313c28b3cd",
+  "automatic:inline:comment:claude":
+    "7cc743b25c7c0cdf43ade70e2149022936e2b4ebb1b77661250dcc1a3443967c",
+  "automatic:inline:comment:codex":
+    "b1bc2f7bda95db2bf6097785f2a1c92f3c6652d04493934b56ad9f9e2a8d8a30",
+  "automatic:inline:comment:copilot":
+    "1e110874f79c4f371920a52d40f8dae109d0f40f1acf6e458d06bb4f0a7bcce8",
+  "automatic:inline:comment:gemini":
+    "97706bc2e8c88b6dee1e2f2eab2c28459d5edcc97d7493baf53a0cfaffc6ce35",
+  "automatic:inline:request-changes:claude":
+    "6a125fe56ff8035321f0507e405462be4673879c50b2222d7fcaac1b3318c2c0",
+  "automatic:inline:request-changes:codex":
+    "4422e4a688ede8c0b2691d03ac2ecf744c9c0215089c44eb927f5a2f5ce2b6b6",
+  "automatic:inline:request-changes:copilot":
+    "5b447c3bf391b83663831898bc4e1551a8c62b4aa21a2baec54295192ea98efa",
+  "automatic:inline:request-changes:gemini":
+    "79b1229b684f6b626c1e66de3eb4d7e197ab15da39c661e36079d4cdb4d43578",
+  "automatic:summary:comment:claude":
+    "aebb4a08fa91ab035c32d1e80e0b893ebc678c04982ea3640ed8be2dde9b401e",
+  "automatic:summary:comment:codex":
+    "16b9a892730f9639ff5ec3634c7f7922264b232c9a26f7e1ac4550048d2fae2d",
+  "automatic:summary:comment:copilot":
+    "d517db18999f03c1670c9e46792422438fb97245824df989f67468fe30812e8b",
+  "automatic:summary:comment:gemini":
+    "41972c22110d520b2ecce5bfc7a317b23f9bac4107e0ca29286d952a51e12e27",
+  "automatic:summary:request-changes:claude":
+    "b92e6f9c513fd0c0ca4b51bf51062698a43abb39d2341c7bd32c02ffaff433dd",
+  "automatic:summary:request-changes:codex":
+    "99bf29e6d40293eca9d5a6fd2d4e024deb27d966db1babce823fe021fed3a3ed",
+  "automatic:summary:request-changes:copilot":
+    "6ff2a3e9540978c718bf5af3dbad437d58f9478d60636d01281435be272e52e3",
+  "automatic:summary:request-changes:gemini":
+    "e6079c7bf6b0370105f4d3aa5f6e336e40b9995f721676d1204bc98f245c07da",
+  "disabled:inline:comment:claude":
+    "f22e77599124bae180b6b5f9a99ad1a131c077c9955835ddfc4d4feeb097aeb3",
+  "disabled:inline:comment:codex":
+    "1dc30f02c0ea69e04eb4969e8f61ab658b94d794ff35c2ae36dd566289e4b963",
+  "disabled:inline:comment:copilot":
+    "9e1a8ddcc587deeaddcf9c376b78a462cb23b42e67317982fa20dd9a303cc7fa",
+  "disabled:inline:comment:gemini":
+    "fa82a186f35f9cbc3e1d6afe475470f8affec3e2e949e121237fd032098d68c9",
+  "disabled:inline:request-changes:claude":
+    "0ca2cc56137875929186c2deee01fa1e247555399814c7e99184eb22db1e189a",
+  "disabled:inline:request-changes:codex":
+    "923d32f878da7052d5f4e52c1a9791a54d98fe1c65bdb36eebb2ff6895d257ec",
+  "disabled:inline:request-changes:copilot":
+    "a34cb2c8dc7fc4165a4b99f3a4ac7c548226af2422f3ff39808bd5987cd96ed4",
+  "disabled:inline:request-changes:gemini":
+    "1a6fbd37936f6333593182b02da36ef51396012eb5544015c0c1d58ba663255f",
+  "disabled:summary:comment:claude":
+    "dc59b76a32dffa4aaae0cba6fa9bf923b26c56c0a82412540ebda0733b8a36f6",
+  "disabled:summary:comment:codex":
+    "b2ed457ad38f56728c75fb9f5f5311a36434e1b20310068465bbf26209fd4006",
+  "disabled:summary:comment:copilot":
+    "892a52a7a25ea11f70429772e1e3523eeddbbcbb3d22a1017e4e4d6717bbdf7f",
+  "disabled:summary:comment:gemini":
+    "abfff3bab0030b9c1cee1eb4285119f75098027a42ed682b980014e01626bcfe",
+  "disabled:summary:request-changes:claude":
+    "c28b6222bbf4015f79daac593ab2200c93a2fa90432da0895b24e1808613e926",
+  "disabled:summary:request-changes:codex":
+    "676a53207523740b0094031ca5374c87bffae966968e3c0614cc439f6387edbf",
+  "disabled:summary:request-changes:copilot":
+    "77412932374371d032647656755525bfb610ef330402199ca78d71d7fc72e5f3",
+  "disabled:summary:request-changes:gemini":
+    "4271c5a22d2e6863f95c69a3c53354c2be41d56def3af2a6d3b00c313c28b3cd",
 });
 export const RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE = Object.freeze({
   claude: "f1ac491b665080316eb9ae1c0b9762b58d39e416c09677dd28a6e54d5ccf5ea4",
@@ -236,37 +261,23 @@ function issueTriageSafeOutputsAreBounded(authority) {
   );
 }
 
-function maintenanceSecrets(expectedEngine) {
-  const provider = MAINTENANCE_PROVIDER_SECRETS[expectedEngine];
-  if (!provider) return null;
-  return [...new Set([...MAINTENANCE_SHARED_SECRETS, ...provider])].sort();
-}
-
-function issueTriageSecrets(expectedEngine) {
-  const provider = MAINTENANCE_PROVIDER_SECRETS[expectedEngine];
-  if (!provider) return null;
-  return [
-    ...new Set([
-      ...MAINTENANCE_SHARED_SECRETS,
-      ...provider,
-      "RIVET_APP_PRIVATE_KEY",
-    ]),
-  ].sort();
-}
-
 export function assessMaintenanceTrust({
   authority,
   expectedEngine,
   expectedImports = [],
   expectedModel,
   expectedTriggers = [],
-  expectedActionsSha256 = RIVET_MAINTENANCE_ACTIONS_SHA256,
-  expectedJobConditionsSha256 = RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256,
-  expectedJobAuthoritySha256 = RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256,
+  expectedActionsSha256 = RIVET_MAINTENANCE_ACTIONS_SHA256_BY_ENGINE,
+  expectedJobConditionsSha256 = RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256_BY_ENGINE,
+  expectedJobAuthoritySha256 = RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256_BY_ENGINE,
   expectedSecrets,
   expectedLocalActions = [],
 }) {
   const violations = [];
+  const knownEngine = isApprovedMaintenanceEngine(expectedEngine);
+  if (!knownEngine) {
+    violations.push("maintenance engine is not approved");
+  }
   if (!sameValues(authority.triggers, expectedTriggers)) {
     violations.push("maintenance trigger differs from the approved inventory");
   }
@@ -350,23 +361,35 @@ export function assessMaintenanceTrust({
     );
   }
   const maintenanceDigests = maintenanceAuthorityDigests(authority);
+  const approvedActionsSha256 = maintenanceDigestForEngine(
+    expectedActionsSha256,
+    expectedEngine,
+  );
+  const approvedJobConditionsSha256 = maintenanceDigestForEngine(
+    expectedJobConditionsSha256,
+    expectedEngine,
+  );
+  const approvedJobAuthoritySha256 = maintenanceDigestForEngine(
+    expectedJobAuthoritySha256,
+    expectedEngine,
+  );
   if (
-    !expectedActionsSha256 ||
-    maintenanceDigests.actions !== expectedActionsSha256
+    !approvedActionsSha256 ||
+    maintenanceDigests.actions !== approvedActionsSha256
   ) {
     violations.push("maintenance actions differ from the approved inventory");
   }
   if (
-    !expectedJobConditionsSha256 ||
-    maintenanceDigests.jobConditions !== expectedJobConditionsSha256
+    !approvedJobConditionsSha256 ||
+    maintenanceDigests.jobConditions !== approvedJobConditionsSha256
   ) {
     violations.push(
       "maintenance job conditions differ from the approved inventory",
     );
   }
   if (
-    !expectedJobAuthoritySha256 ||
-    maintenanceDigests.jobAuthority !== expectedJobAuthoritySha256
+    !approvedJobAuthoritySha256 ||
+    maintenanceDigests.jobAuthority !== approvedJobAuthoritySha256
   ) {
     violations.push(
       "maintenance runner, container, permissions, environment, or services differ from the approved inventory",
@@ -574,7 +597,9 @@ export function assessRepairTrust({
     repairAuthorityDigest(authority, expectedValidationCommands) !==
       authoritySha256
   ) {
-    violations.push("repair workflow differs from the approved authority inventory");
+    violations.push(
+      "repair workflow differs from the approved authority inventory",
+    );
   }
   if (!authority.inlinedImports) {
     violations.push("repair workflow and native imports must be inlined");
@@ -621,7 +646,9 @@ export function assessRepairTrust({
     violations.push("repair checkouts must not persist credentials");
   }
   if (!repairWriteJobsOnly(authority.writeCapableJobs)) {
-    violations.push("repair write authority differs from the approved inventory");
+    violations.push(
+      "repair write authority differs from the approved inventory",
+    );
   }
   if (!sameValues(authority.safeOutputJobs, ["safe_outputs"])) {
     violations.push("repair must use only the safe_outputs publisher");

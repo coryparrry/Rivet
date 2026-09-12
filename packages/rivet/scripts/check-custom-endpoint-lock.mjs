@@ -6,6 +6,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,10 +114,19 @@ export async function checkCustomEndpointLocks({ write = false } = {}) {
   }
 }
 
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const args = process.argv.slice(2);
   if (args.some((arg) => arg !== "--write"))
     throw new Error("Usage: check-custom-endpoint-lock.mjs [--write]");

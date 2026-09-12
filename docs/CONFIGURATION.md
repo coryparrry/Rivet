@@ -9,12 +9,13 @@ npx @coryparry/rivet init
 
 The default policy enables automatic pull-request review and incoming issue
 triage. Maintenance, repair, issue implementation, and merge remain disabled by
-default.
+default. Automatic review is required for every supported installation, so
+`review.automatic` must remain `true`.
 
 ## Refreshing an installation
 
-Bare `rivet init` resolves the repository root when run from any directory
-inside the checkout. Explicit modes use the current directory unless
+Bare `npx @coryparry/rivet init` resolves the repository root when run from any
+directory inside the checkout. Explicit modes use the current directory unless
 `--repository` supplies the root. Both paths read an existing
 `.github/rivet.json` from the selected root before rendering workflows. Flags
 such as `--issues` and `--maintenance` update only the named setting; custom
@@ -23,7 +24,8 @@ Explicit `--repair` likewise preserves the existing policy while changing
 `repair.authority` to `owner`.
 
 Guided review setup refuses to silently downgrade an existing repair
-installation. Refresh that installation with `rivet init --repair --setup-pr`.
+installation. Refresh that installation with
+`npx @coryparry/rivet init --repair --setup-pr`.
 The installer accepts only current managed output or a supported frozen prior
 baseline, and it refuses to overwrite an adopter edit. Semantically equivalent
 compiled YAML locks keep their existing bytes, so compiler comments or
@@ -78,15 +80,15 @@ the new permission takes effect. `issues.implementation` must remain
 
 ## Other controls
 
-| Setting                  | Current behavior                                                              |
-| ------------------------ | ----------------------------------------------------------------------------- |
-| `review.automatic`       | Runs review and reconciles its four managed labels on eligible pull requests. |
-| `review.inlineFindings`  | Allows bounded inline review comments.                                        |
-| `review.requestChanges`  | Chooses comment-only or request-changes review.                               |
-| `review.maximumFindings` | Limits findings to an integer from 1 to 20.                                   |
-| `repair.authority`       | `never` by default; `owner` requires the separate repair authority upgrade.   |
-| `maintenance.mode`       | `disabled`, `manual`, or weekly `scheduled`; report-only in enabled modes.    |
-| `merge.authority`        | Must remain `never`.                                                          |
+| Setting                  | Current behavior                                                            |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `review.automatic`       | Must remain `true`; every supported installation runs review automatically. |
+| `review.inlineFindings`  | Allows bounded inline review comments.                                      |
+| `review.requestChanges`  | Chooses comment-only or request-changes review.                             |
+| `review.maximumFindings` | Limits findings to an integer from 1 to 20.                                 |
+| `repair.authority`       | `never` by default; `owner` requires the separate repair authority upgrade. |
+| `maintenance.mode`       | `disabled`, `manual`, or weekly `scheduled`; report-only in enabled modes.  |
+| `merge.authority`        | Must remain `never`.                                                        |
 
 The `models.review` engine, model, and effort are also used for incoming issue
 triage. The current default is Codex with `gpt-5.6-luna` and `default` effort.

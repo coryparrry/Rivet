@@ -83,6 +83,11 @@ export function validateRivetConfig(value) {
     "maximumFindings",
   ]);
   boolean(value.review.automatic, "review.automatic");
+  if (!value.review.automatic) {
+    throw new Error(
+      "Rivet config: review.automatic must be true; every supported installation runs review automatically",
+    );
+  }
   boolean(value.review.inlineFindings, "review.inlineFindings");
   boolean(value.review.requestChanges, "review.requestChanges");
   if (
@@ -205,9 +210,7 @@ export function maintenanceWorkflowProjection(value) {
 export function productAuthoritySummary(value) {
   const config = validateRivetConfig(value);
   return Object.freeze([
-    config.review.automatic
-      ? "Review runs automatically for pull request events."
-      : "Review requires an owner action.",
+    "Review runs automatically for pull request events.",
     config.review.inlineFindings
       ? `Review may publish up to ${config.review.maximumFindings} inline findings.`
       : "Review cannot publish inline findings.",

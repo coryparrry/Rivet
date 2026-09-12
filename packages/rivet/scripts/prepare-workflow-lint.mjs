@@ -1,4 +1,5 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
@@ -82,10 +83,19 @@ export async function prepareWorkflowLint(outputDirectory) {
   return outputs;
 }
 
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const outputDirectory = process.argv[2];
   if (!outputDirectory)
     throw new Error("usage: prepare-workflow-lint.mjs OUTPUT_DIRECTORY");

@@ -7,8 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: rivet-release-please-main
@@ -20,11 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Check out the repository with the release token
+      - name: Check out the trusted default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          persist-credentials: true
+          persist-credentials: false
       - name: Open or update the reviewed release pull request
         id: release-please
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
@@ -33,25 +31,82 @@ jobs:
           target-branch: main
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-      - name: Check out the fixed same-repository release pull request
+      - name: Resolve the reviewed release pull request head
         if: steps.release-please.outputs.prs_created == 'true'
+        id: release-pr-head
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          RELEASE_PR: ${{ steps.release-please.outputs.pr }}
+        run: |
+          set -euo pipefail
+          pr_identity="$(node --input-type=module -e '
+            const releasePr = JSON.parse(process.env.RELEASE_PR || "{}");
+            if (!Number.isSafeInteger(releasePr.number) || !releasePr.headBranchName) {
+              throw new Error("release-please did not return a complete release PR");
+            }
+            process.stdout.write(
+              String(releasePr.number) + "\t" + releasePr.headBranchName,
+            );
+          ')"
+          IFS=$'\t' read -r pr_number expected_branch <<< "$pr_identity"
+          test "$expected_branch" = release-please--branches--main--components--rivet
+          pr_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.head | [.repo.full_name, .ref, .sha] | @tsv')"
+          IFS=$'\t' read -r head_repository branch sha <<< "$pr_head"
+          test "$head_repository" = "$GITHUB_REPOSITORY"
+          test "$branch" = "$expected_branch"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Save the trusted manifest refresh script
+        if: steps.release-please.outputs.prs_created == 'true'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git show "$GITHUB_SHA:scripts/refresh-release-manifest.mjs" > "$RUNNER_TEMP/refresh-release-manifest.mjs"
+      - name: Check out the exact reviewed release pull request head
+        if: steps.release-please.outputs.prs_created == 'true'
+        env:
+          RELEASE_PR_BRANCH: ${{ steps.release-pr-head.outputs.branch }}
+          RELEASE_PR_SHA: ${{ steps.release-pr-head.outputs.sha }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin \
-            '+refs/heads/release-please--branches--main--components--rivet:refs/remotes/origin/release-please--branches--main--components--rivet'
-          git switch --create release-please--branches--main--components--rivet \
-            --track refs/remotes/origin/release-please--branches--main--components--rivet
-          test "$(git branch --show-current)" = release-please--branches--main--components--rivet
+            "refs/heads/$RELEASE_PR_BRANCH:refs/remotes/origin/$RELEASE_PR_BRANCH"
+          test "$(git rev-parse "refs/remotes/origin/$RELEASE_PR_BRANCH")" = "$RELEASE_PR_SHA"
+          git switch --detach "$RELEASE_PR_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_PR_SHA"
       - name: Refresh the exact tracked source manifest
         if: steps.release-please.outputs.prs_created == 'true'
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          node scripts/refresh-release-manifest.mjs
-      - name: Verify release pull request branch remains the only changed ref
-        if: steps.release-please.outputs.prs_created == 'true'
+        env:
+          TRUSTED_MANIFEST_SCRIPT: ${{ runner.temp }}/refresh-release-manifest.mjs
         run: |
           set -euo pipefail
-          test "$(git branch --show-current)" = release-please--branches--main--components--rivet
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          node --input-type=module -e '
+            const { pathToFileURL } = await import("node:url");
+            const { refreshManifest } = await import(
+              pathToFileURL(process.env.TRUSTED_MANIFEST_SCRIPT).href
+            );
+            const result = await refreshManifest(process.env.GITHUB_WORKSPACE);
+            process.stdout.write(
+              "release-manifest: " +
+                (result.changed ? "updated" : "already current") +
+                (result.committed ? ", committed" : "") +
+                "\n",
+            );
+          '
+      - name: Verify release pull request branch remains the only changed ref
+        if: steps.release-please.outputs.prs_created == 'true'
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          RELEASE_PR_BRANCH: ${{ steps.release-pr-head.outputs.branch }}
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = ""
           test "$(git status --porcelain=v1 --untracked-files=all)" = ""
-          git push origin HEAD:refs/heads/release-please--branches--main--components--rivet
+          auth_header="$(printf 'x-access-token:%s' "$RELEASE_PLEASE_TOKEN" | base64 | tr -d '\n')"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth_header" \
+            git push origin "HEAD:refs/heads/$RELEASE_PR_BRANCH"

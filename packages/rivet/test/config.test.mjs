@@ -39,6 +39,13 @@ test("rejects unknown fields and malformed review controls", () => {
   const injectedModel = structuredClone(DEFAULT_RIVET_CONFIG);
   injectedModel.models.review.model = "model\npermissions: write-all";
   assert.throws(() => validateRivetConfig(injectedModel), /model is invalid/);
+
+  const ownerReview = structuredClone(DEFAULT_RIVET_CONFIG);
+  ownerReview.review.automatic = false;
+  assert.throws(
+    () => validateRivetConfig(ownerReview),
+    /review\.automatic must be true; every supported installation runs review automatically/,
+  );
 });
 
 test("maps the supported review engine matrix without provider emulation", () => {

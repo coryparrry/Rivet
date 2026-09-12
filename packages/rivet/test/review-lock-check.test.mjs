@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
 import {
   checkIssueTriageLocks,
@@ -17,6 +21,11 @@ import {
   checkRepairLock,
   checkReviewLock,
 } from "../scripts/check-review-lock.mjs";
+
+const execFileAsync = promisify(execFile);
+const reviewLockCheckPath = fileURLToPath(
+  new URL("../scripts/check-review-lock.mjs", import.meta.url),
+);
 
 const LOCK_PATH = path.join(".github", "workflows", "rivet-review.lock.yml");
 const REVIEW_POLICY_FIXTURES = [
@@ -115,14 +124,8 @@ test("rejects a stale repair lock from the pinned compiler", async () => {
   try {
     await mkdir(fixtureRoot, { recursive: true });
     await mkdir(temporaryParent);
-    const fixturePath = path.join(
-      fixtureRoot,
-      "rivet-repair.lock.yml.gz.b64",
-    );
-    await writeFile(
-      fixturePath,
-      gzipSync("checked-in\n").toString("base64"),
-    );
+    const fixturePath = path.join(fixtureRoot, "rivet-repair.lock.yml.gz.b64");
+    await writeFile(fixturePath, gzipSync("checked-in\n").toString("base64"));
     const options = {
       fixtureRoot,
       temporaryParent,
@@ -131,10 +134,7 @@ test("rejects a stale repair lock from the pinned compiler", async () => {
         assert.equal(workflowId, "rivet-repair");
         assert.equal(binaryPath, "/verified/gh-aw");
         await writeFile(
-          path.join(
-            repositoryRoot,
-            ".github/workflows/rivet-repair.lock.yml",
-          ),
+          path.join(repositoryRoot, ".github/workflows/rivet-repair.lock.yml"),
           "regenerated\n",
         );
       },
@@ -144,10 +144,7 @@ test("rejects a stale repair lock from the pinned compiler", async () => {
       checkRepairLock(options),
       /rivet-repair\.lock\.yml fixture does not match/,
     );
-    await writeFile(
-      fixturePath,
-      gzipSync("regenerated\n").toString("base64"),
-    );
+    await writeFile(fixturePath, gzipSync("regenerated\n").toString("base64"));
     await checkRepairLock(options);
     assert.deepEqual(await readdir(temporaryParent), []);
   } finally {
@@ -309,5 +306,17 @@ test("rejects stale issue-triage locks from the pinned compiler", async () => {
     assert.deepEqual(await readdir(temporaryParent), []);
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("runs the review-lock-check CLI when invoked through a symlink", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "rivet-review-cli-"));
+  try {
+    const alias = path.join(directory, "check-review-lock.mjs");
+    await symlink(reviewLockCheckPath, alias);
+    const { stdout } = await execFileAsync(process.execPath, [alias]);
+    assert.equal(stdout, "Rivet workflow locks are current\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
