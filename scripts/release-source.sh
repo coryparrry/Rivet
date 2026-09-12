@@ -125,10 +125,10 @@ if ! $verify_only; then
   esac
   final_archive="$output_dir/codekeeper-source-${commit}.tar.gz"
   [[ ! -e $final_archive ]] || die "refusing to overwrite existing archive: $final_archive"
-  archive=$(mktemp "$output_dir/.codekeeper-source-${short_commit}.XXXXXX.tar.gz")
+  archive=$(mktemp "$output_dir/.codekeeper-source-${short_commit}.tar.gz.XXXXXX")
 else
   final_archive=''
-  archive=$(mktemp "${TMPDIR:-/tmp}/codekeeper-source-${short_commit}.XXXXXX.tar.gz")
+  archive=$(mktemp "${TMPDIR:-/tmp}/codekeeper-source-${short_commit}.tar.gz.XXXXXX")
 fi
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/codekeeper-source-verify.XXXXXX")

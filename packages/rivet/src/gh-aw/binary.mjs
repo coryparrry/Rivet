@@ -59,10 +59,18 @@ async function cachedBinary(binaryPath, asset) {
     fail(`cached binary is not a regular file: ${binaryPath}`);
   }
   const bytes = await readFile(binaryPath);
-  if (bytes.length !== asset.size || digest(bytes) !== asset.sha256) {
-    fail(`cached binary checksum does not match ${asset.name}`);
+  if (bytes.length !== asset.size || digest(bytes) !== asset.sha256)
+    return false;
+  return metadata;
+}
+
+async function ensureExecutable(binaryPath, metadata, chmodImpl) {
+  if ((metadata.mode & 0o111) !== 0) return;
+  try {
+    await chmodImpl(binaryPath, 0o700);
+  } catch (cause) {
+    fail(`could not make ${binaryPath} executable`, { cause });
   }
-  return true;
 }
 
 async function downloadAsset(asset, fetchImpl) {
@@ -100,6 +108,7 @@ export async function ensureGhAwBinary({
   cacheRoot = defaultRivetCacheRoot(),
   release = GH_AW_RELEASE,
   fetchImpl = globalThis.fetch,
+  chmodImpl = chmod,
 } = {}) {
   const asset = resolveGhAwAsset({ platform, arch, release });
   const directory = path.join(
@@ -109,8 +118,10 @@ export async function ensureGhAwBinary({
     `${platform}-${arch}`,
   );
   const binaryPath = path.join(directory, executableName(platform));
-  if (await cachedBinary(binaryPath, asset)) {
-    if (platform !== "win32") await chmod(binaryPath, 0o700);
+  const cachedMetadata = await cachedBinary(binaryPath, asset);
+  if (cachedMetadata) {
+    if (platform !== "win32")
+      await ensureExecutable(binaryPath, cachedMetadata, chmodImpl);
     return binaryPath;
   }
 
@@ -124,8 +135,15 @@ export async function ensureGhAwBinary({
   try {
     await writeFile(temporaryPath, bytes, { flag: "wx", mode: 0o700 });
     await rename(temporaryPath, binaryPath);
-    if (platform !== "win32") await chmod(binaryPath, 0o700);
+    if (platform !== "win32") {
+      const metadata = await lstat(binaryPath);
+      if (metadata.isSymbolicLink() || !metadata.isFile()) {
+        fail(`cached binary is not a regular file: ${binaryPath}`);
+      }
+      await ensureExecutable(binaryPath, metadata, chmodImpl);
+    }
   } catch (cause) {
+    if (cause?.message?.startsWith("Rivet gh-aw compiler:")) throw cause;
     fail(`could not install ${asset.name}`, { cause });
   } finally {
     await unlink(temporaryPath).catch(() => {});

@@ -148,14 +148,107 @@ export function inspectRepairPatch(patch) {
   ) {
     fail("patch is empty, oversized, or binary");
   }
-  const paths = [
-    ...patch.matchAll(/^diff --git a\/([^\s]+) b\/([^\s]+)$/gm),
-  ].map(([, before, after]) => {
-    if (before !== after || !safePath(after) || protectedPath(after)) {
-      fail("patch contains a renamed, unsafe, or protected path");
+  const lines = patch.split("\n");
+  const paths = [];
+  let section;
+  let hunk;
+
+  const finishSection = () => {
+    if (hunk) fail("patch contains a malformed unified diff hunk");
+    if (section && (section.oldPath === null) !== (section.newPath === null)) {
+      fail("patch contains an incomplete unified diff section");
     }
-    return after;
-  });
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (hunk) {
+      if (line === "\\ No newline at end of file") continue;
+      if (line.startsWith(" ")) {
+        hunk.oldLines -= 1;
+        hunk.newLines -= 1;
+      } else if (line.startsWith("+")) {
+        hunk.newLines -= 1;
+      } else if (line.startsWith("-")) {
+        hunk.oldLines -= 1;
+      } else {
+        fail("patch contains a malformed unified diff hunk");
+      }
+      if (hunk.oldLines < 0 || hunk.newLines < 0) {
+        fail("patch contains a malformed unified diff hunk");
+      }
+      if (hunk.oldLines === 0 && hunk.newLines === 0) hunk = undefined;
+      continue;
+    }
+
+    if (line.startsWith("diff --git ")) {
+      finishSection();
+      const match = /^diff --git a\/([^\s]+) b\/([^\s]+)$/.exec(line);
+      if (!match) fail("patch contains a malformed diff header");
+      const [, before, after] = match;
+      if (before !== after || !safePath(after) || protectedPath(after)) {
+        fail("patch contains a renamed, unsafe, or protected path");
+      }
+      section = { path: after, oldPath: null, newPath: null };
+      paths.push(after);
+      continue;
+    }
+    if (line.startsWith("diff --git")) {
+      fail("patch contains a malformed diff header");
+    }
+
+    const oldHeader = /^--- (.+)$/.exec(line);
+    const newHeader = /^\+\+\+ (.+)$/.exec(line);
+    if (oldHeader) {
+      const next = lines[index + 1];
+      if (!/^\+\+\+ (.+)$/.test(next ?? "")) {
+        if (!section) {
+          fail("patch contains an unanchored unified diff section");
+        }
+        fail("patch contains an incomplete unified diff section");
+      }
+      if (!section || section.oldPath !== null || section.newPath !== null) {
+        fail("patch contains an unanchored unified diff section");
+      }
+      const nextPath = /^\+\+\+ (.+)$/.exec(next)[1];
+      if (
+        oldHeader[1] !== `a/${section.path}` ||
+        nextPath !== `b/${section.path}`
+      ) {
+        fail("patch contains an unanchored unified diff section");
+      }
+      section.oldPath = oldHeader[1];
+      section.newPath = nextPath;
+      index += 1;
+      continue;
+    }
+    if (newHeader) {
+      fail("patch contains an incomplete unified diff section");
+    }
+
+    const hunkHeader =
+      /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$/.exec(line);
+    if (hunkHeader) {
+      if (!section || section.oldPath === null || section.newPath === null) {
+        fail("patch contains an unanchored unified diff section");
+      }
+      hunk = {
+        oldLines: Number(hunkHeader[2] ?? 1),
+        newLines: Number(hunkHeader[4] ?? 1),
+      };
+      if (hunk.oldLines === 0 && hunk.newLines === 0) {
+        hunk = undefined;
+      }
+      continue;
+    }
+    if (line.startsWith("@@ ")) {
+      fail("patch contains a malformed unified diff hunk");
+    }
+    if (line.startsWith("--- ") || line.startsWith("+++ ")) {
+      fail("patch contains an unanchored unified diff section");
+    }
+  }
+  finishSection();
   if (
     paths.length < 1 ||
     paths.length > MAX_PATCH_FILES ||

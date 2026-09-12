@@ -345,6 +345,101 @@ test("prints a review-only GitHub App plan", async () => {
   assert.deepEqual(JSON.parse(stdout.read()), result);
 });
 
+test("uses selected repository configuration when planning App authority", async (t) => {
+  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+  configuration.issues.triage = "disabled";
+  const root = await configuredRepository(t, configuration);
+  const result = await runCli(["app-plan", "--repository", "Acme/Widget"], {
+    cwd: root,
+    stdout: output().stream,
+  });
+
+  assert.deepEqual(result.authority.permissions, {
+    contents: "read",
+    metadata: "read",
+    pullRequests: "write",
+  });
+  assert.equal(
+    new URL(result.registrationUrl).searchParams.has("issues"),
+    false,
+  );
+
+  const explicitlySelected = await runCli(
+    ["app-plan", "--repository", "Acme/Widget", "--repository-root", root],
+    { cwd: "/not-the-repository", stdout: output().stream },
+  );
+  assert.deepEqual(explicitlySelected.authority, result.authority);
+});
+
+test("uses default App authority for an explicit root without Rivet configuration", async (t) => {
+  const repositoryRoot = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-cli-missing-config-"),
+  );
+  t.after(() => rm(repositoryRoot, { recursive: true, force: true }));
+  const result = await runCli(
+    [
+      "app-plan",
+      "--repository",
+      "Acme/Widget",
+      "--repository-root",
+      repositoryRoot,
+    ],
+    { stdout: output().stream },
+  );
+  assert.deepEqual(result.authority.permissions, {
+    contents: "read",
+    issues: "write",
+    metadata: "read",
+    pullRequests: "write",
+  });
+});
+
+test("passes current repository configuration to explicit App setup commands", async (t) => {
+  const configuration = structuredClone(DEFAULT_RIVET_CONFIG);
+  configuration.issues.triage = "disabled";
+  const root = await configuredRepository(t, configuration);
+  for (const [command, dependency] of [
+    ["app-configure", "configureReviewAppImpl"],
+    ["app-verify", "verifyReviewAppImpl"],
+  ]) {
+    let received;
+    await runCli(
+      [
+        command,
+        "--repository",
+        "Acme/Widget",
+        "--client-id",
+        "Iv123456789012345678",
+        "--private-key-file",
+        "/keys/rivet.pem",
+      ],
+      {
+        cwd: root,
+        stdout: output().stream,
+        [dependency]: async (options) => {
+          received = options;
+          return { verified: true };
+        },
+      },
+    );
+    assert.deepEqual(received.configuration, configuration);
+    assert.equal(received.repositoryRoot, undefined);
+  }
+});
+
+test("prints usage and exits successfully for every explicit App command help", async () => {
+  for (const command of ["app-plan", "app-configure", "app-verify"]) {
+    const stdout = output();
+    const result = await runCli([command, "--help"], {
+      stdout: stdout.stream,
+    });
+
+    assert.equal(result, 0);
+    assert.match(stdout.read(), /Usage:/);
+    assert.match(stdout.read(), new RegExp(command));
+  }
+});
+
 for (const [command, dependency] of [
   ["app-configure", "configureReviewAppImpl"],
   ["app-verify", "verifyReviewAppImpl"],

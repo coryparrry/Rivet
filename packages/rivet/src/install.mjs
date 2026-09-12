@@ -1,11 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  lstat,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-} from "node:fs/promises";
+import { lstat, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -18,10 +12,7 @@ import {
 import { compileGhAwWorkflow, validateGhAwWorkflow } from "./gh-aw/compile.mjs";
 import { inspectCompiledWorkflow } from "./gh-aw/inspect.mjs";
 import { assertInstallationTrust } from "./installation-trust.mjs";
-import {
-  applyInstallation,
-  existingFile,
-} from "./installation-apply.mjs";
+import { applyInstallation, existingFile } from "./installation-apply.mjs";
 export { applyInstallation } from "./installation-apply.mjs";
 import {
   reviewOnlyBaseline,
@@ -31,6 +22,11 @@ import {
 } from "./installation-variants.mjs";
 import { completeInstallationFiles } from "./installation-receipt.mjs";
 import { buildModelConfigurationBaseline } from "./model-configuration-upgrade.mjs";
+import {
+  prepareIssueTriageDeletion,
+  prepareMaintenanceDeletion,
+  prepareMaintenanceModeChange,
+} from "./installation-deletions.mjs";
 import { buildTaggingUpgradeBaselines } from "./tagging-upgrade.mjs";
 import {
   buildIssueTriageUpgradeBaselines,
@@ -58,6 +54,7 @@ import {
   REVIEW_CONTEXT_ASSET_PATHS,
 } from "./workflow-files.mjs";
 import {
+  knownInstallationReceiptUpgrade,
   knownCompilerDrift,
   knownUsageCacheUpgrade,
   matchesWorkflowBaseline,
@@ -252,14 +249,19 @@ async function prepareInstallation({
     const requiresUpgrade =
       Boolean(existingIssueTriagePath) ||
       [...files].some(
-      ([relativePath, content]) =>
-        existingFiles.get(relativePath) !== null &&
-        existingFiles.get(relativePath) !== content &&
-        !knownCompilerDrift(
-          relativePath,
-          existingFiles.get(relativePath),
-          content,
-        ),
+        ([relativePath, content]) =>
+          existingFiles.get(relativePath) !== null &&
+          existingFiles.get(relativePath) !== content &&
+          !knownInstallationReceiptUpgrade(
+            relativePath,
+            existingFiles.get(relativePath),
+            content,
+          ) &&
+          !knownCompilerDrift(
+            relativePath,
+            existingFiles.get(relativePath),
+            content,
+          ),
       );
     let modelBaseline = null;
     if (requiresUpgrade) {
@@ -279,51 +281,23 @@ async function prepareInstallation({
       });
       if (modelBaseline) baselines.push(modelBaseline);
     }
-    if (existingIssueTriagePath) {
-      const matchesIssueTriageFiles = (baseline) =>
-        baseline &&
-        ISSUE_TRIAGE_MANAGED_PATHS.every(
-          (relativePath) =>
-            existingIssueTriageFiles.get(relativePath) ===
-            baseline.get(relativePath),
-        );
-      const issueTriageBaselines = modelBaseline ? [modelBaseline] : [];
-      if (!issueTriageBaselines.some(matchesIssueTriageFiles)) {
-        const previousConfig = structuredClone(config);
-        previousConfig.issues.triage = "automatic";
-        const previousReviewConfig = reviewConfiguration(mode, previousConfig);
-        issueTriageBaselines.push(
-          ...(await buildIssueTriageUpgradeBaselines({
-            stagingRoot: path.join(stagingRoot, "disabled-issue-triage"),
-            mode,
-            config: previousConfig,
-            reviewConfig: previousReviewConfig,
-            validation,
-            binaryPath,
-            compileWorkflow,
-            validateWorkflow,
-            env,
-          })),
-        );
-      }
-      issueTriageDeletionFiles = issueTriageBaselines.find(
-        matchesIssueTriageFiles,
-      );
-      if (!issueTriageDeletionFiles) {
-        const changedPath = ISSUE_TRIAGE_MANAGED_PATHS.find(
-          (relativePath) =>
-            !issueTriageBaselines.some(
-              (baseline) =>
-                existingIssueTriageFiles.get(relativePath) ===
-                baseline.get(relativePath),
-            ),
-        );
-        throw new Error(
-          `Rivet installer: refusing to delete ${changedPath ?? existingIssueTriagePath}`,
-        );
-      }
-      baselines.push(...issueTriageBaselines);
-    }
+    const issueTriageDeletion = await prepareIssueTriageDeletion({
+      existingFiles: existingIssueTriageFiles,
+      existingPath: existingIssueTriagePath,
+      modelBaseline,
+      managedPaths: ISSUE_TRIAGE_MANAGED_PATHS,
+      stagingRoot,
+      mode,
+      config,
+      reviewConfiguration,
+      validation,
+      binaryPath,
+      compileWorkflow,
+      validateWorkflow,
+      env,
+    });
+    issueTriageDeletionFiles = issueTriageDeletion.deletionFiles;
+    baselines.push(...issueTriageDeletion.baselines);
     if (config.maintenance.mode === "disabled") {
       const existingMaintenanceFiles = new Map(
         await Promise.all(
@@ -338,130 +312,50 @@ async function prepareInstallation({
       );
       const existingConfigurationContent =
         existingFiles.get(".github/rivet.json");
-      let existingConfiguration = null;
-      if (existingConfigurationContent !== null) {
-        try {
-          existingConfiguration = validateRivetConfig(
-            JSON.parse(existingConfigurationContent),
-          );
-        } catch {
-          existingConfiguration = null;
-        }
-      }
-      const previousMaintenanceMode = existingConfiguration?.maintenance.mode;
-      if (
-        ["manual", "scheduled"].includes(previousMaintenanceMode) ||
-        existingMaintenancePath
-      ) {
-        if (!existingConfiguration || previousMaintenanceMode === "disabled") {
-          throw new Error(
-            `Rivet installer: refusing to delete ${existingMaintenancePath ?? ".github/rivet.json"}`,
-          );
-        }
-        const expectedConfiguration = structuredClone(config);
-        expectedConfiguration.maintenance.mode = previousMaintenanceMode;
-        if (!isDeepStrictEqual(existingConfiguration, expectedConfiguration)) {
-          throw new Error(
-            "Rivet installer: refusing to delete .github/rivet.json",
-          );
-        }
-        const previousFiles =
-          modelBaseline ??
-          (await buildMaintenanceVariant({
-            stagingRoot: path.join(stagingRoot, "previous-maintenance"),
-            mode,
-            config: existingConfiguration,
-            validation,
-            binaryPath,
-            compileWorkflow,
-            validateWorkflow,
-            env,
-          }));
-        if (
-          existingConfigurationContent !==
-          previousFiles.get(".github/rivet.json")
-        ) {
-          throw new Error(
-            "Rivet installer: refusing to delete .github/rivet.json",
-          );
-        }
-        if (
-          existingFiles.get(".github/rivet/installation.json") !==
-          previousFiles.get(".github/rivet/installation.json")
-        ) {
-          throw new Error(
-            "Rivet installer: refusing to delete .github/rivet/installation.json",
-          );
-        }
-        for (const relativePath of MAINTENANCE_MANAGED_PATHS) {
-          if (
-            existingMaintenanceFiles.get(relativePath) !==
-            previousFiles.get(relativePath)
-          ) {
-            throw new Error(
-              `Rivet installer: refusing to delete ${relativePath}`,
-            );
-          }
-        }
-        baselines.push(previousFiles);
-        maintenanceDeletionFiles = previousFiles;
-      }
+      const maintenanceDeletion = await prepareMaintenanceDeletion({
+        existingFiles,
+        existingMaintenanceFiles,
+        existingMaintenancePath,
+        existingConfigurationContent,
+        desiredConfiguration: files.get(".github/rivet.json"),
+        desiredReceipt: files.get(".github/rivet/installation.json"),
+        managedPaths: MAINTENANCE_MANAGED_PATHS,
+        modelBaseline,
+        stagingRoot,
+        mode,
+        config,
+        buildVariant: buildMaintenanceVariant,
+        variantOptions: {
+          validation,
+          binaryPath,
+          compileWorkflow,
+          validateWorkflow,
+          env,
+        },
+      });
+      maintenanceDeletionFiles = maintenanceDeletion.deletionFiles;
+      baselines.push(...maintenanceDeletion.baselines);
     }
-    if (requiresUpgrade && config.maintenance.mode !== "disabled") {
-      const existingConfigurationContent =
-        existingFiles.get(".github/rivet.json");
-      if (existingConfigurationContent !== null) {
-        let existingConfiguration = null;
-        try {
-          existingConfiguration = validateRivetConfig(
-            JSON.parse(existingConfigurationContent),
-          );
-        } catch {
-          existingConfiguration = null;
-        }
-        const previousMaintenanceMode = existingConfiguration?.maintenance.mode;
-        if (
-          ["manual", "scheduled"].includes(previousMaintenanceMode) &&
-          previousMaintenanceMode !== config.maintenance.mode
-        ) {
-          const previousConfiguration = structuredClone(config);
-          previousConfiguration.maintenance.mode = previousMaintenanceMode;
-          const previousFiles =
-            modelBaseline ??
-            (await buildMaintenanceVariant({
-              stagingRoot: path.join(stagingRoot, "previous-maintenance"),
-              mode,
-              config: previousConfiguration,
-              validation,
-              binaryPath,
-              compileWorkflow,
-              validateWorkflow,
-              env,
-            }));
-          if (
-            existingConfigurationContent !==
-              previousFiles.get(".github/rivet.json") ||
-            existingFiles.get(".github/rivet/installation.json") !==
-              previousFiles.get(".github/rivet/installation.json")
-          ) {
-            throw new Error(
-              "Rivet installer: refusing to overwrite .github/rivet.json",
-            );
-          }
-          for (const relativePath of MAINTENANCE_MANAGED_PATHS) {
-            if (
-              existingFiles.get(relativePath) !==
-              previousFiles.get(relativePath)
-            ) {
-              throw new Error(
-                `Rivet installer: refusing to overwrite ${relativePath}`,
-              );
-            }
-          }
-          baselines.push(previousFiles);
-        }
-      }
-    }
+    const maintenanceModeBaseline = await prepareMaintenanceModeChange({
+      requiresUpgrade,
+      existingFiles,
+      existingConfigurationContent,
+      desiredMaintenanceMode: config.maintenance.mode,
+      managedPaths: MAINTENANCE_MANAGED_PATHS,
+      modelBaseline,
+      stagingRoot,
+      mode,
+      config,
+      buildVariant: buildMaintenanceVariant,
+      variantOptions: {
+        validation,
+        binaryPath,
+        compileWorkflow,
+        validateWorkflow,
+        env,
+      },
+    });
+    if (maintenanceModeBaseline) baselines.push(maintenanceModeBaseline);
     let reviewBaseline = null;
     if (requiresUpgrade && mode === "repair") {
       reviewBaseline = reviewOnlyBaseline(files, reviewConfig);
@@ -680,6 +574,7 @@ async function prepareInstallation({
         return (
           current === null ||
           current === content ||
+          knownInstallationReceiptUpgrade(relativePath, current, content) ||
           knownCompilerDrift(relativePath, current, content) ||
           knownUsageCacheUpgrade(relativePath, current, content) ||
           matchesHistoricalManagedFile(relativePath, digest(current)) ||
@@ -694,7 +589,8 @@ async function prepareInstallation({
       const current = existingFiles.get(relativePath);
       const canUpgrade =
         current !== null &&
-        (knownCompilerDrift(relativePath, current, content) ||
+        (knownInstallationReceiptUpgrade(relativePath, current, content) ||
+          knownCompilerDrift(relativePath, current, content) ||
           knownUsageCacheUpgrade(relativePath, current, content) ||
           matchesHistoricalManagedFile(relativePath, digest(current)) ||
           compatibleBaselines.some((baseline) =>
@@ -728,6 +624,7 @@ async function prepareInstallation({
     ]) {
       if (!deletionFiles) continue;
       for (const relativePath of managedPaths) {
+        if (!deletionFiles.has(relativePath)) continue;
         const current = deletionFiles.get(relativePath);
         plannedFiles.push({
           path: relativePath,

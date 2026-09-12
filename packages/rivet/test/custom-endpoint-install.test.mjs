@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { DEFAULT_RIVET_CONFIG } from "../src/config.mjs";
 import {
@@ -15,6 +25,11 @@ import {
   endpointFixtureCompiler,
   mutateWorkflow,
 } from "./custom-endpoint-fixtures.mjs";
+
+const execFileAsync = promisify(execFile);
+const customEndpointLockCheckPath = fileURLToPath(
+  new URL("../scripts/check-custom-endpoint-lock.mjs", import.meta.url),
+);
 
 async function repository(t) {
   const repositoryRoot = await mkdtemp(
@@ -322,4 +337,27 @@ test("keeps provider keys out of compiler processes", async (t) => {
     },
   });
   assert.equal(compilations, 4);
+});
+
+test("runs the custom-endpoint-lock CLI when invoked through a symlink", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-endpoint-cli-"),
+  );
+  try {
+    const alias = path.join(directory, "check-custom-endpoint-lock.mjs");
+    await symlink(customEndpointLockCheckPath, alias);
+    await assert.rejects(
+      execFileAsync(process.execPath, [alias, "--unexpected"]),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(
+          error.stderr,
+          /Usage: check-custom-endpoint-lock\.mjs \[--write\]/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

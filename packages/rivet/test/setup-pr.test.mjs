@@ -10,6 +10,7 @@ import { gunzipSync } from "node:zlib";
 import { DEFAULT_RIVET_CONFIG } from "../src/config.mjs";
 import { prepareReviewInstallation } from "../src/install.mjs";
 import {
+  createRepairSetupPullRequest,
   createReviewSetupPullRequest,
   repositoryFromGitHubOrigin,
 } from "../src/setup-pr.mjs";
@@ -21,6 +22,31 @@ const PACKAGE_ROOT = path.resolve(
   "..",
 );
 const LOCK_PATH = ".github/workflows/rivet-review.lock.yml";
+const REPAIR_LOCK_PATH = ".github/workflows/rivet-repair.lock.yml";
+const REPAIR_SETUP_PATHS = [
+  ".github/rivet.json",
+  ".github/rivet/actions/authority-receipt/action.yml",
+  ".github/rivet/actions/authority-receipt/index.mjs",
+  ".github/rivet/actions/prepare-issue-context/action.yml",
+  ".github/rivet/actions/prepare-issue-context/index.mjs",
+  ".github/rivet/actions/prepare-review-context/action.yml",
+  ".github/rivet/actions/prepare-review-context/index.mjs",
+  ".github/rivet/actions/publish-repair/action.yml",
+  ".github/rivet/actions/publish-repair/index.mjs",
+  ".github/rivet/actions/validate-repair/action.yml",
+  ".github/rivet/actions/validate-repair/index.mjs",
+  ".github/rivet/agents/fixer.md",
+  ".github/rivet/agents/issue-triager.md",
+  ".github/rivet/agents/pr-reviewer.md",
+  ".github/rivet/aw/review-extension.md",
+  ".github/rivet/installation.json",
+  ".github/workflows/rivet-issue-triage.lock.yml",
+  ".github/workflows/rivet-issue-triage.md",
+  REPAIR_LOCK_PATH,
+  ".github/workflows/rivet-repair.md",
+  LOCK_PATH,
+  ".github/workflows/rivet-review.md",
+];
 
 async function git(cwd, args) {
   const { stdout } = await execFileAsync("git", args, {
@@ -44,6 +70,20 @@ async function fixtureCompiler({ repositoryRoot, workflowId }) {
         repositoryRoot,
         ".github/workflows/rivet-issue-triage.lock.yml",
       ),
+      gunzipSync(Buffer.from(encoded, "base64")),
+    );
+    return;
+  }
+  if (workflowId === "rivet-repair") {
+    const encoded = await readFile(
+      path.join(
+        PACKAGE_ROOT,
+        "test/fixtures/repair/rivet-repair.lock.yml.gz.b64",
+      ),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repositoryRoot, REPAIR_LOCK_PATH),
       gunzipSync(Buffer.from(encoded, "base64")),
     );
     return;
@@ -77,7 +117,14 @@ async function repository(t) {
 
 function runner(
   calls,
-  { fail, beforeRun, pullRequestList, pullRequestUrl, pullRequestView } = {},
+  {
+    fail,
+    beforeRun,
+    pullRequestList,
+    pullRequestUrl,
+    pullRequestView,
+    setupBranch = "rivet/setup-test",
+  } = {},
 ) {
   return async (command, args, { cwd }) => {
     calls.push([command, args]);
@@ -100,7 +147,7 @@ function runner(
       return JSON.stringify(
         pullRequestView ?? {
           baseRefName: "main",
-          headRefName: "rivet/setup-test",
+          headRefName: setupBranch,
           headRefOid: await git(cwd, ["rev-parse", "HEAD"]),
           isDraft: true,
           state: "OPEN",
@@ -113,11 +160,13 @@ function runner(
         return JSON.stringify([
           {
             baseRefName: "main",
-            headRefName: "rivet/setup-test",
-            headRefOid: await git(cwd, ["rev-parse", "rivet/setup-test"]),
+            headRefName: setupBranch,
+            headRefOid: await git(cwd, ["rev-parse", setupBranch]),
             isDraft: true,
             state: "OPEN",
-            title: "chore: set up Rivet review",
+            title: `chore: set up Rivet ${
+              setupBranch === "rivet/setup-repair" ? "repair" : "review"
+            }`,
             url: "https://github.com/acme/example/pull/17",
           },
         ]);
@@ -210,6 +259,102 @@ test("creates a verified draft setup pull request without merging", async (t) =>
   assert.match(
     pullRequestCall[1][pullRequestCall[1].indexOf("--body") + 1],
     /workflows selected in the configuration/,
+  );
+});
+
+test("creates a verified draft repair setup pull request with repair mode", async (t) => {
+  const { root, remote } = await repository(t);
+  const calls = [];
+  const progress = [];
+  const compiledWorkflowIds = [];
+  const result = await createRepairSetupPullRequest({
+    repositoryRoot: root,
+    compileWorkflow: async (options) => {
+      compiledWorkflowIds.push(options.workflowId);
+      await fixtureCompiler(options);
+    },
+    validateWorkflow: async () => {},
+    run: runner(calls, { setupBranch: "rivet/setup-repair" }),
+    onProgress: (message) => progress.push(message),
+  });
+
+  assert.equal(result.repository, "acme/example");
+  assert.equal(result.defaultBranch, "main");
+  assert.equal(result.branch, "rivet/setup-repair");
+  assert.match(result.commit, /^[0-9a-f]{40}$/);
+  assert.equal(
+    result.pullRequestUrl,
+    "https://github.com/acme/example/pull/17",
+  );
+  assert.deepEqual(compiledWorkflowIds, [
+    "rivet-review",
+    "rivet-issue-triage",
+    "rivet-repair",
+  ]);
+  assert.deepEqual(progress, [
+    "Preparing Rivet installation",
+    "Checking existing Rivet installation",
+    "Creating Rivet setup pull request",
+    "Writing Rivet installation",
+  ]);
+
+  assert.equal(
+    await git(root, ["branch", "--show-current"]),
+    "rivet/setup-repair",
+  );
+  assert.equal(
+    await git(root, ["rev-parse", "HEAD^"]),
+    await git(root, ["rev-parse", "origin/main"]),
+  );
+  assert.equal(
+    await git(remote, ["rev-parse", "refs/heads/rivet/setup-repair"]),
+    result.commit,
+  );
+
+  const expectedPaths = [...REPAIR_SETUP_PATHS].sort();
+  const committedPaths = (
+    await git(root, ["ls-tree", "-r", "--name-only", result.commit])
+  )
+    .split("\n")
+    .filter((filePath) => filePath && filePath !== "README.md")
+    .sort();
+  assert.deepEqual(committedPaths, expectedPaths);
+
+  const configuration = JSON.parse(
+    await readFile(path.join(root, ".github/rivet.json"), "utf8"),
+  );
+  assert.equal(configuration.repair.authority, "owner");
+  const receipt = JSON.parse(
+    await readFile(path.join(root, ".github/rivet/installation.json"), "utf8"),
+  );
+  assert.equal(receipt.mode, "repair");
+  assert.deepEqual(receipt.managedFiles, expectedPaths);
+  assert.match(
+    await readFile(
+      path.join(root, ".github/workflows/rivet-repair.md"),
+      "utf8",
+    ),
+    /name: Rivet pull request repair/,
+  );
+
+  const pullRequestCall = calls.find(
+    ([command, args]) =>
+      command === "gh" && args[0] === "pr" && args[1] === "create",
+  );
+  assert.ok(pullRequestCall);
+  assert.equal(
+    pullRequestCall[1][pullRequestCall[1].indexOf("--head") + 1],
+    "rivet/setup-repair",
+  );
+  assert.equal(
+    pullRequestCall[1][pullRequestCall[1].indexOf("--title") + 1],
+    "chore: set up Rivet repair",
+  );
+  const body = pullRequestCall[1][pullRequestCall[1].indexOf("--body") + 1];
+  assert.match(body, /Repair requires an owner action/);
+  assert.deepEqual(
+    [...body.matchAll(/^- `([^`]+)`$/gm)].map(([, filePath]) => filePath),
+    expectedPaths,
   );
 });
 
@@ -506,7 +651,10 @@ test("preserves an unverified local branch after commit identity lookup fails", 
     }),
     /commit identity unavailable.*local setup branch rivet\/setup-test was not deleted/s,
   );
-  assert.notEqual(await git(root, ["branch", "--list", "rivet/setup-test"]), "");
+  assert.notEqual(
+    await git(root, ["branch", "--list", "rivet/setup-test"]),
+    "",
+  );
 });
 
 test("does not delete a setup branch that advanced remotely", async (t) => {
@@ -658,36 +806,51 @@ test("reuses a prepared review plan without compiling it again", async (t) => {
   );
 });
 
-test("refuses setup from a dirty repository before creating a branch", async (t) => {
-  const { root } = await repository(t);
-  await writeFile(path.join(root, "untracked.txt"), "keep me\n");
-  await assert.rejects(
-    createReviewSetupPullRequest({
-      repositoryRoot: root,
-      compileWorkflow: fixtureCompiler,
-      validateWorkflow: async () => {},
-      run: runner([]),
-    }),
-    /working tree must be clean/,
-  );
-  assert.equal(await git(root, ["branch", "--show-current"]), "main");
-  assert.equal(
-    await readFile(path.join(root, "untracked.txt"), "utf8"),
-    "keep me\n",
-  );
-});
+const SETUP_FACTORIES = [
+  {
+    mode: "review",
+    factory: createReviewSetupPullRequest,
+    branch: "rivet/setup-review",
+  },
+  {
+    mode: "repair",
+    factory: createRepairSetupPullRequest,
+    branch: "rivet/setup-repair",
+  },
+];
 
-test("refuses setup when the branch already exists", async (t) => {
-  const { root } = await repository(t);
-  await git(root, ["branch", "rivet/setup-review"]);
-  await assert.rejects(
-    createReviewSetupPullRequest({
-      repositoryRoot: root,
-      compileWorkflow: fixtureCompiler,
-      validateWorkflow: async () => {},
-      run: runner([]),
-    }),
-    /setup branch already exists/,
-  );
-  assert.equal(await git(root, ["branch", "--show-current"]), "main");
-});
+for (const { mode, factory, branch } of SETUP_FACTORIES) {
+  test(`refuses ${mode} setup from a dirty repository before creating a branch`, async (t) => {
+    const { root } = await repository(t);
+    await writeFile(path.join(root, "untracked.txt"), "keep me\n");
+    await assert.rejects(
+      factory({
+        repositoryRoot: root,
+        compileWorkflow: fixtureCompiler,
+        validateWorkflow: async () => {},
+        run: runner([]),
+      }),
+      /working tree must be clean/,
+    );
+    assert.equal(await git(root, ["branch", "--show-current"]), "main");
+    assert.equal(
+      await readFile(path.join(root, "untracked.txt"), "utf8"),
+      "keep me\n",
+    );
+  });
+
+  test(`refuses ${mode} setup when the branch already exists`, async (t) => {
+    const { root } = await repository(t);
+    await git(root, ["branch", branch]);
+    await assert.rejects(
+      factory({
+        repositoryRoot: root,
+        compileWorkflow: fixtureCompiler,
+        validateWorkflow: async () => {},
+        run: runner([]),
+      }),
+      /setup branch already exists/,
+    );
+    assert.equal(await git(root, ["branch", "--show-current"]), "main");
+  });
+}

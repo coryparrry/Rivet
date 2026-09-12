@@ -134,8 +134,12 @@ The default installer records the minimum authority for review plus automatic
 issue triage: Contents read, Issues write, Metadata read, and Pull requests
 write. Disabling triage removes Issues permission. Repair preserves the selected
 review permissions and widens only Contents to write.
-`npx @coryparry/rivet app-plan` produces a private, webhook-free registration
-URL for the administrator to use on GitHub.com; it does not create the App.
+`npx @coryparry/rivet app-plan --repository OWNER/REPOSITORY` produces a
+private, webhook-free registration URL for the administrator to use on
+GitHub.com; it does not create the App. The commands load an existing
+`.github/rivet.json` from the current checkout. Add the optional
+`--repository-root /path/to/repository` to select another checkout.
+`--repository OWNER/REPOSITORY` remains the required GitHub repository identity.
 
 `npx @coryparry/rivet app-configure` accepts absolute or `~/` PEM paths, safely
 reads a bounded regular file, uploads the key as a repository secret, and sets

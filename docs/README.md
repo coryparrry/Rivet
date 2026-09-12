@@ -10,7 +10,7 @@ The compiler-boundary self-review result is recorded in
 | Document                                                   | Type        | Purpose                                                                                                       |
 | ---------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
 | [Installation](../INSTALL.md)                              | How-to      | Evaluate a local package and prove an installation.                                                           |
-| [Legacy release delivery](RELEASE_READINESS.md)            | Historical  | Superseded Codekeeper release process and its migration status.                                               |
+| [Release delivery](RELEASE_READINESS.md)                   | How-to      | Use the current Release Please and npm OIDC publication process.                                              |
 | [Agent change and release safety](AGENT_RELEASE_SAFETY.md) | How-to      | Map breaking points and verify every source, package, workflow, and live-release boundary before publication. |
 | [Repository governance](REPOSITORY_GOVERNANCE.md)          | How-to      | Review and deliberately apply branch and immutable-tag rules.                                                 |
 | [Configuration](CONFIGURATION.md)                          | Reference   | Configure policy, workflows, providers, and capabilities.                                                     |

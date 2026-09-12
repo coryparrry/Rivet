@@ -7,6 +7,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -301,7 +302,12 @@ export async function checkRepairLock({
       recursive: true,
     });
     await writeFile(
-      path.join(temporaryRoot, ".github", "workflows", `${REPAIR_WORKFLOW_ID}.md`),
+      path.join(
+        temporaryRoot,
+        ".github",
+        "workflows",
+        `${REPAIR_WORKFLOW_ID}.md`,
+      ),
       renderRivetRepairWorkflow(),
     );
     await compileWorkflow({
@@ -400,12 +406,7 @@ export async function checkReviewLock({
   for (const [name, triage, inlineFindings, requestChanges] of [
     ["rivet-review-request-changes.lock.yml", "automatic", true, true],
     ["rivet-review-summary.lock.yml", "automatic", false, false],
-    [
-      "rivet-review-summary-request-changes.lock.yml",
-      "automatic",
-      false,
-      true,
-    ],
+    ["rivet-review-summary-request-changes.lock.yml", "automatic", false, true],
     ["rivet-review-disabled-request-changes.lock.yml", "disabled", true, true],
     ["rivet-review-disabled-summary.lock.yml", "disabled", false, false],
     [
@@ -491,7 +492,19 @@ export async function checkReviewLock({
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   await checkReviewLock();
   await checkMaintenanceLocks();
   await checkIssueTriageLocks();

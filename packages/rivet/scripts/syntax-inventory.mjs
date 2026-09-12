@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,10 +58,19 @@ export function checkSyntax(files, { root = PACKAGE_ROOT } = {}) {
   return files.length;
 }
 
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const files = await collectSyntaxFiles();
   const count = checkSyntax(files);
   process.stdout.write(`Syntax checked ${count} modules\n`);

@@ -126,8 +126,8 @@ record its exact SHA-256:
         "bodyIncludes": ["above 100", "negative totals"]
       }
     ],
-    "submitReviewEvent": "COMMENT",
-    "createIssueCount": 0
+    "deferredIssue": null,
+    "submitReviewEvent": "COMMENT"
   }
 }
 ```

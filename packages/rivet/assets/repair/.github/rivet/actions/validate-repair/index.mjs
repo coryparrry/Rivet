@@ -120,6 +120,95 @@ function validationContainerArguments(command, cwd) {
   ];
 }
 
+function workspacePaths(output) {
+  if (typeof output !== "string") fail("Git did not return workspace paths");
+  return [...new Set(output.split("\0").filter(Boolean))].sort();
+}
+
+function workspaceHashes(output) {
+  if (typeof output !== "string") fail("Git did not return workspace digests");
+  return output.split(/\r?\n/).filter(Boolean);
+}
+
+async function workspaceDigests(paths, runImpl, cwd, env) {
+  const digests = [];
+  for (let offset = 0; offset < paths.length; offset += 100) {
+    const batch = paths.slice(offset, offset + 100);
+    const output = await runImpl("git", ["hash-object", "--", ...batch], {
+      cwd,
+      env,
+    });
+    const hashes = workspaceHashes(output);
+    if (
+      hashes.length !== batch.length ||
+      hashes.some((hash) => !/^[0-9a-f]{40}$/.test(hash))
+    ) {
+      fail("Git did not return workspace digests");
+    }
+    digests.push(
+      ...batch.map((workspacePath, index) => [workspacePath, hashes[index]]),
+    );
+  }
+  return digests;
+}
+
+async function workspaceState(runImpl, cwd, env) {
+  const unstaged = workspacePaths(
+    await runImpl("git", ["diff", "--name-only", "-z"], { cwd, env }),
+  );
+  const staged = workspacePaths(
+    await runImpl("git", ["diff", "--cached", "--name-only", "-z"], {
+      cwd,
+      env,
+    }),
+  );
+  const untracked = workspacePaths(
+    await runImpl("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+      cwd,
+      env,
+    }),
+  );
+  const ignored = workspacePaths(
+    await runImpl(
+      "git",
+      ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+      { cwd, env },
+    ),
+  );
+  return Object.freeze({
+    changedPaths: [...new Set([...unstaged, ...staged])].sort(),
+    untrackedPaths: untracked,
+    ignoredPaths: ignored,
+    untrackedDigests: await workspaceDigests(untracked, runImpl, cwd, env),
+    ignoredDigests: await workspaceDigests(ignored, runImpl, cwd, env),
+  });
+}
+
+function samePaths(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function assertWorkspaceState(before, after, proposedPaths) {
+  const expectedChanged = [
+    ...new Set([...before.changedPaths, ...proposedPaths]),
+  ].sort();
+  if (!samePaths(after.changedPaths, expectedChanged)) {
+    fail("validation changed unexpected tracked workspace paths");
+  }
+  if (!samePaths(after.untrackedPaths, before.untrackedPaths)) {
+    fail("validation changed unexpected untracked workspace paths");
+  }
+  if (!samePaths(after.untrackedDigests, before.untrackedDigests)) {
+    fail("validation changed unexpected untracked workspace files");
+  }
+  if (!samePaths(after.ignoredPaths, before.ignoredPaths)) {
+    fail("validation changed unexpected ignored workspace paths");
+  }
+  if (!samePaths(after.ignoredDigests, before.ignoredDigests)) {
+    fail("validation changed unexpected ignored workspace files");
+  }
+}
+
 export async function runValidateRepairAction({
   env = process.env,
   fetchImpl = fetch,
@@ -162,6 +251,7 @@ export async function runValidateRepairAction({
     label: "fetch reviewed head",
   });
   await runImpl("git", ["checkout", "--detach", pull.head.sha], { cwd, env });
+  const baselineWorkspace = await workspaceState(runImpl, cwd, env);
   const proposedPatchPath = path.join(
     env.RUNNER_TEMP,
     "rivet-proposed-repair.patch",
@@ -176,17 +266,14 @@ export async function runValidateRepairAction({
     cwd,
     env,
   });
+  const appliedWorkspace = await workspaceState(runImpl, cwd, env);
+  assertWorkspaceState(baselineWorkspace, appliedWorkspace, proposedPaths);
   const canonicalPatch = await runImpl(
     "git",
     ["diff", "--binary", "--full-index", "--no-ext-diff"],
     { cwd, env, trim: false },
   );
-  const changedPaths = (
-    await runImpl("git", ["diff", "--name-only", "-z"], { cwd, env })
-  )
-    .split("\0")
-    .filter(Boolean)
-    .sort();
+  const changedPaths = appliedWorkspace.changedPaths;
   if (
     JSON.stringify(changedPaths) !== JSON.stringify([...proposedPaths].sort())
   ) {
@@ -209,12 +296,9 @@ export async function runValidateRepairAction({
     ["diff", "--binary", "--full-index", "--no-ext-diff"],
     { cwd, env, trim: false },
   );
-  const untracked = await runImpl(
-    "git",
-    ["ls-files", "--others", "--exclude-standard", "-z"],
-    { cwd, env },
-  );
-  if (finalPatch !== canonicalPatch || untracked) {
+  const finalWorkspace = await workspaceState(runImpl, cwd, env);
+  assertWorkspaceState(baselineWorkspace, finalWorkspace, proposedPaths);
+  if (finalPatch !== canonicalPatch) {
     fail("validation changed the proposed repair workspace");
   }
   const live = await githubJson(

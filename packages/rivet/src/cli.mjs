@@ -37,12 +37,15 @@ Explicit commands (advanced/noninteractive):
              [--maintenance <disabled|manual|scheduled>]
              [--setup-branch <name>]
                                Upgrade an existing install with explicit options.
-  app-plan --repository <owner/repository> [--owner-type <User|Organization>]
+  app-plan --repository <owner/repository> [--repository-root <path>]
+             [--owner-type <User|Organization>]
                                Print the required GitHub App permissions.
-  app-configure --repository <owner/repository> --client-id <id>
+  app-configure --repository <owner/repository> [--repository-root <path>]
+                 --client-id <id>
                  --private-key-file <path>
                                Configure an App from explicit credentials.
-  app-verify --repository <owner/repository> --client-id <id>
+  app-verify --repository <owner/repository> [--repository-root <path>]
+             --client-id <id>
              --private-key-file <path> [--repair]
                                Verify explicit App credentials and permissions.
 
@@ -62,7 +65,9 @@ function parseAppCredentials(args, { allowRepair = false } = {}) {
       options.repair = true;
       continue;
     } else if (argument === "--repository" && value) options.repository = value;
-    else if (argument === "--client-id" && value) options.clientId = value;
+    else if (argument === "--repository-root" && value) {
+      options.repositoryRoot = value;
+    } else if (argument === "--client-id" && value) options.clientId = value;
     else if (argument === "--private-key-file" && value) {
       options.privateKeyPath = value;
     } else {
@@ -89,6 +94,11 @@ function parseAppPlan(args) {
       index += 1;
       continue;
     }
+    if (argument === "--repository-root" && args[index + 1]) {
+      options.repositoryRoot = args[index + 1];
+      index += 1;
+      continue;
+    }
     if (argument === "--owner-type" && args[index + 1]) {
       options.ownerType = args[index + 1];
       index += 1;
@@ -100,6 +110,11 @@ function parseAppPlan(args) {
     throw new Error(`Rivet: --repository is required\n${usage()}`);
   }
   return options;
+}
+
+async function appConfiguration(options, cwd) {
+  const repositoryRoot = path.resolve(cwd, options.repositoryRoot ?? ".");
+  return readRivetConfiguration(repositoryRoot);
 }
 
 function parseInit(args) {
@@ -197,20 +212,37 @@ export async function runCli(
     stdout.write(usage());
     return 0;
   }
+  if (
+    ["app-plan", "app-configure", "app-verify"].includes(command) &&
+    args.includes("--help")
+  ) {
+    stdout.write(usage());
+    return 0;
+  }
   if (command === "app-plan") {
     const options = parseAppPlan(args);
+    const configuration = await appConfiguration(options, cwd);
     const result = Object.freeze({
       repository: options.repository,
-      authority: reviewAppAuthority(),
-      registrationUrl: reviewAppRegistrationUrl(options),
+      authority: reviewAppAuthority(configuration),
+      registrationUrl: reviewAppRegistrationUrl({
+        ...options,
+        configuration,
+      }),
     });
     stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result;
   }
   if (command === "app-configure" || command === "app-verify") {
-    const { repair = false, ...options } = parseAppCredentials(args, {
+    const {
+      repair = false,
+      repositoryRoot,
+      ...options
+    } = parseAppCredentials(args, {
       allowRepair: command === "app-verify",
     });
+    const configuration = await appConfiguration({ repositoryRoot }, cwd);
+    if (configuration) options.configuration = configuration;
     const result = await (command === "app-configure"
       ? configureReviewAppImpl(options)
       : repair

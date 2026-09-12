@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -172,6 +173,99 @@ test("downloads, verifies, installs, and reuses the pinned binary", async (t) =>
   assert.equal(downloads, 1);
 });
 
+test("reuses an executable read-only cache without attempting chmod", async (t) => {
+  const cacheRoot = await temporaryCache(t);
+  const bytes = Buffer.from("verified gh-aw fixture");
+  const release = fixtureRelease(bytes);
+  const directory = path.join(cacheRoot, "gh-aw", release.version, "linux-x64");
+  const binaryPath = path.join(directory, "gh-aw");
+  await mkdir(directory, { recursive: true });
+  await writeFile(binaryPath, bytes, { mode: 0o500 });
+
+  let chmodCalls = 0;
+  assert.equal(
+    await ensureGhAwBinary({
+      platform: "linux",
+      arch: "x64",
+      cacheRoot,
+      release,
+      fetchImpl: async () => {
+        throw new Error("an executable cache must not fetch");
+      },
+      chmodImpl: async () => {
+        chmodCalls += 1;
+        throw new Error("chmod forbidden");
+      },
+    }),
+    binaryPath,
+  );
+  assert.equal(chmodCalls, 0);
+  assert.equal((await lstat(binaryPath)).mode & 0o777, 0o500);
+});
+
+test("repairs a non-executable cache with chmod", async (t) => {
+  const cacheRoot = await temporaryCache(t);
+  const bytes = Buffer.from("verified gh-aw fixture");
+  const release = fixtureRelease(bytes);
+  const directory = path.join(cacheRoot, "gh-aw", release.version, "linux-x64");
+  const binaryPath = path.join(directory, "gh-aw");
+  await mkdir(directory, { recursive: true });
+  await writeFile(binaryPath, bytes, { mode: 0o400 });
+
+  const chmodCalls = [];
+  assert.equal(
+    await ensureGhAwBinary({
+      platform: "linux",
+      arch: "x64",
+      cacheRoot,
+      release,
+      fetchImpl: async () => {
+        throw new Error("a verified cache must not fetch");
+      },
+      chmodImpl: async (...args) => {
+        chmodCalls.push(args);
+        return chmod(...args);
+      },
+    }),
+    binaryPath,
+  );
+  assert.deepEqual(chmodCalls, [[binaryPath, 0o700]]);
+  assert.equal((await lstat(binaryPath)).mode & 0o777, 0o700);
+});
+
+test("wraps a required chmod failure for a non-executable cache", async (t) => {
+  const cacheRoot = await temporaryCache(t);
+  const bytes = Buffer.from("verified gh-aw fixture");
+  const release = fixtureRelease(bytes);
+  const directory = path.join(cacheRoot, "gh-aw", release.version, "linux-x64");
+  const binaryPath = path.join(directory, "gh-aw");
+  await mkdir(directory, { recursive: true });
+  await writeFile(binaryPath, bytes, { mode: 0o400 });
+
+  await assert.rejects(
+    ensureGhAwBinary({
+      platform: "linux",
+      arch: "x64",
+      cacheRoot,
+      release,
+      fetchImpl: async () => {
+        throw new Error("a verified cache must not fetch");
+      },
+      chmodImpl: async () => {
+        throw new Error("chmod forbidden");
+      },
+    }),
+    (error) => {
+      assert.match(
+        error.message,
+        /^Rivet gh-aw compiler: could not make .* executable$/,
+      );
+      assert.equal(error.cause?.message, "chmod forbidden");
+      return true;
+    },
+  );
+});
+
 test("rejects a downloaded checksum mismatch without installing it", async (t) => {
   const cacheRoot = await temporaryCache(t);
   const release = fixtureRelease(Buffer.from("expected"));
@@ -195,28 +289,33 @@ test("rejects a downloaded checksum mismatch without installing it", async (t) =
   await assert.rejects(lstat(binaryPath), { code: "ENOENT" });
 });
 
-test("rejects a corrupt cached binary without falling back to a download", async (t) => {
+test("replaces a corrupt cached binary through an atomic verified download", async (t) => {
   const cacheRoot = await temporaryCache(t);
   const release = fixtureRelease();
   const directory = path.join(cacheRoot, "gh-aw", release.version, "linux-x64");
   const binaryPath = path.join(directory, "gh-aw");
   await mkdir(directory, { recursive: true });
   await writeFile(binaryPath, "corrupt");
-  let fetched = false;
-  await assert.rejects(
-    ensureGhAwBinary({
+  let fetched = 0;
+  assert.equal(
+    await ensureGhAwBinary({
       platform: "linux",
       arch: "x64",
       cacheRoot,
       release,
       fetchImpl: async () => {
-        fetched = true;
+        fetched += 1;
         return response(Buffer.from("verified gh-aw fixture"));
       },
     }),
-    /cached binary checksum does not match/,
+    binaryPath,
   );
-  assert.equal(fetched, false);
+  assert.equal(fetched, 1);
+  assert.deepEqual(
+    await readFile(binaryPath),
+    Buffer.from("verified gh-aw fixture"),
+  );
+  assert.equal((await lstat(binaryPath)).mode & 0o777, 0o700);
 });
 
 test("rejects symlinked cache entries and failed downloads", async (t) => {

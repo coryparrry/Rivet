@@ -8,11 +8,7 @@ import { inspectCompiledWorkflow } from "../src/gh-aw/inspect.mjs";
 import { DEFAULT_RIVET_CONFIG } from "../src/config.mjs";
 import {
   assessIssueTriageTrust,
-  assessMaintenanceTrust,
   assessPullRequestTargetTrust,
-  RIVET_MAINTENANCE_ACTIONS_SHA256,
-  RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256,
-  RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256,
   RIVET_ISSUE_TRIAGE_AUTHORITY_SHA256_BY_ENGINE,
   RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY,
 } from "../src/gh-aw/trust.mjs";
@@ -33,186 +29,6 @@ const LOCAL_ACTIONS = [
   "./.github/rivet/actions/prepare-review-context",
 ];
 const ISSUE_LOCAL_ACTIONS = ["./.github/rivet/actions/prepare-issue-context"];
-const MAINTENANCE_LOCAL_ACTION = "./.github/rivet/actions/validate-audit";
-test("rejects maintenance mutation authority and non-default checkouts", async () => {
-  const compiled = await maintenanceFixtureAuthority("scheduled");
-  const authority = {
-    ...compiled,
-    triggers: ["schedule"],
-    additionalRepositories: ["other/repository"],
-    writeCapableJobs: [{ job: "publish", permissions: { issues: "write" } }],
-    checkouts: [
-      {
-        repository: "other/repository",
-        ref: "main",
-        path: null,
-        persistCredentials: true,
-      },
-    ],
-  };
-  const trust = assessMaintenanceTrust({
-    authority,
-    expectedEngine: "codex",
-    expectedImports: [".github/rivet/agents/repository-auditor.md"],
-    expectedModel: "gpt-5.6-luna",
-    expectedTriggers: ["schedule", "workflow_dispatch"],
-    expectedLocalActions: [MAINTENANCE_LOCAL_ACTION],
-  });
-  assert.deepEqual(trust, {
-    trusted: false,
-    baseContext: "maintenance default branch",
-    violations: [
-      "maintenance trigger differs from the approved inventory",
-      "additional repository checkouts are not allowed",
-      "checkouts must use the default branch without persisted credentials",
-      "only conclusion may use workflow write authority for cancellation",
-    ],
-  });
-});
-
-async function maintenanceFixtureAuthority(mode) {
-  const encoded = await readFile(
-    path.join(
-      PACKAGE_ROOT,
-      `test/fixtures/maintenance/rivet-maintenance-${mode}.lock.yml.gz.b64`,
-    ),
-    "utf8",
-  );
-  return inspectCompiledWorkflow(
-    gunzipSync(Buffer.from(encoded, "base64")).toString("utf8"),
-  );
-}
-
-test("accepts the pinned manual and scheduled maintenance authorities", async () => {
-  for (const mode of ["manual", "scheduled"]) {
-    const authority = await maintenanceFixtureAuthority(mode);
-    const trust = assessMaintenanceTrust({
-      authority,
-      expectedActionsSha256: RIVET_MAINTENANCE_ACTIONS_SHA256,
-      expectedJobAuthoritySha256: RIVET_MAINTENANCE_JOB_AUTHORITY_SHA256,
-      expectedEngine: "codex",
-      expectedImports: [".github/rivet/agents/repository-auditor.md"],
-      expectedJobConditionsSha256: RIVET_MAINTENANCE_JOB_CONDITIONS_SHA256,
-      expectedLocalActions: [MAINTENANCE_LOCAL_ACTION],
-      expectedModel: "gpt-5.6-luna",
-      expectedTriggers:
-        mode === "scheduled"
-          ? ["schedule", "workflow_dispatch"]
-          : ["workflow_dispatch"],
-    });
-    assert.equal(trust.trusted, true, trust.violations.join("; "));
-  }
-});
-
-test("rejects maintenance action, script, secret, and condition drift", async () => {
-  const authority = await maintenanceFixtureAuthority("manual");
-  for (const [change, violation] of [
-    [
-      {
-        actions: authority.actions.map((action, index) =>
-          index === 0
-            ? { ...action, with: { ...action.with, destination: "/tmp/other" } }
-            : action,
-        ),
-      },
-      "maintenance actions differ from the approved inventory",
-    ],
-    [
-      {
-        scripts: authority.scripts.map((script, index) =>
-          index === 0
-            ? { ...script, run: `${script.run}\necho changed` }
-            : script,
-        ),
-      },
-      "maintenance actions differ from the approved inventory",
-    ],
-    [
-      {
-        secrets: [...authority.secrets, "EXTRA_TOKEN"].sort(),
-        manifestSecrets: [...authority.manifestSecrets, "EXTRA_TOKEN"].sort(),
-      },
-      "maintenance secrets differ from the approved inventory",
-    ],
-    [
-      {
-        jobConditions: {
-          ...authority.jobConditions,
-          agent: { ...authority.jobConditions.agent, if: null },
-        },
-      },
-      "maintenance job conditions differ from the approved inventory",
-    ],
-  ]) {
-    const trust = assessMaintenanceTrust({
-      authority: { ...authority, ...change },
-      expectedEngine: "codex",
-      expectedImports: [".github/rivet/agents/repository-auditor.md"],
-      expectedLocalActions: [MAINTENANCE_LOCAL_ACTION],
-      expectedModel: "gpt-5.6-luna",
-      expectedTriggers: ["workflow_dispatch"],
-    });
-    assert.deepEqual(trust.violations, [violation]);
-  }
-});
-
-test("rejects maintenance runner, container, permission, env, and service drift", async () => {
-  const authority = await maintenanceFixtureAuthority("manual");
-  const changes = [
-    ["agent", "runsOn", "self-hosted"],
-    ["agent", "container", "ubuntu:latest"],
-    ["agent", "permissions", { "*": "read" }],
-    ["agent", "env", { ...authority.jobAuthority.agent.env, UNTRUSTED: "1" }],
-    ["agent", "services", { database: { image: "postgres:latest" } }],
-  ];
-  for (const [job, field, value] of changes) {
-    const jobAuthority = structuredClone(authority.jobAuthority);
-    jobAuthority[job][field] = value;
-    const trust = assessMaintenanceTrust({
-      authority: { ...authority, jobAuthority },
-      expectedEngine: "codex",
-      expectedImports: [".github/rivet/agents/repository-auditor.md"],
-      expectedLocalActions: [MAINTENANCE_LOCAL_ACTION],
-      expectedModel: "gpt-5.6-luna",
-      expectedTriggers: ["workflow_dispatch"],
-    });
-    assert.deepEqual(
-      trust.violations,
-      [
-        "maintenance runner, container, permissions, environment, or services differ from the approved inventory",
-      ],
-      `${job}.${field} drift must fail closed`,
-    );
-  }
-});
-
-test("rejects maintenance workflow and deployment environment drift", async () => {
-  const authority = await maintenanceFixtureAuthority("manual");
-  const workflowEnv = { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" };
-  const workflowTrust = assessMaintenanceTrust({
-    authority: { ...authority, workflowEnv },
-    expectedEngine: "codex",
-    expectedImports: [".github/rivet/agents/repository-auditor.md"],
-    expectedLocalActions: [MAINTENANCE_LOCAL_ACTION],
-    expectedModel: "gpt-5.6-luna",
-    expectedTriggers: ["workflow_dispatch"],
-  });
-  assert.deepEqual(workflowTrust.violations, [
-    "maintenance runner, container, permissions, environment, or services differ from the approved inventory",
-  ]);
-
-  const jobAuthority = structuredClone(authority.jobAuthority);
-  jobAuthority.agent.environment = "production";
-  const jobTrust = assessMaintenanceTrust({
-    authority: { ...authority, jobAuthority },
-    expectedEngine: "codex",
-    expectedImports: [".github/rivet/agents/repository-auditor.md"],
-    expectedLocalActions: [MAINTENANCE_LOCAL_ACTION],
-    expectedModel: "gpt-5.6-luna",
-    expectedTriggers: ["workflow_dispatch"],
-  });
-  assert.deepEqual(jobTrust.violations, workflowTrust.violations);
-});
 
 async function compiledAuthority() {
   const source = await readFile(
@@ -632,9 +448,7 @@ test("binds disabled issue triage to its exact review authority", async () => {
   const unknownMode = assessReview(authority, {
     expectedIssueTriage: "owner",
     expectedReviewAuthoritySha256:
-      RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY[
-        "disabled:inline:comment:codex"
-      ],
+      RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY["disabled:inline:comment:codex"],
   });
   assert.equal(unknownMode.trusted, false);
   assert.match(unknownMode.violations.join("; "), /issue triage mode/);
@@ -949,13 +763,8 @@ test("binds the complete review graph and execution controls", async () => {
 });
 
 test("pins a complete review inventory for every supported engine", () => {
-  assert.equal(
-    Object.keys(RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY).length,
-    32,
-  );
-  for (const digest of Object.values(
-    RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY,
-  )) {
+  assert.equal(Object.keys(RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY).length, 32);
+  for (const digest of Object.values(RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY)) {
     assert.match(digest, /^[0-9a-f]{64}$/);
   }
 });

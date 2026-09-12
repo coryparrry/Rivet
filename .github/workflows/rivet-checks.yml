@@ -30,12 +30,12 @@ jobs:
           package-manager-cache: false
       - name: Install pinned npm
         run: npm install --global npm@12.0.2 --ignore-scripts --no-audit --no-fund
-      - name: Install Rivet
-        working-directory: packages/rivet
+      - name: Install repository dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Run Rivet checks
-        working-directory: packages/rivet
+      - name: Run repository checks
         run: npm run check
+      - name: Run root manifest tests
+        run: node --test scripts/refresh-release-manifest.test.mjs
 
   actionlint:
     runs-on: ${{ vars.RIVET_CI_RUNNER || 'ubuntu-latest' }}
@@ -57,7 +57,10 @@ jobs:
       - name: Prepare compiled workflow lint copies
         run: |
           npm ci --prefix packages/rivet --ignore-scripts --no-audit --no-fund
-          node packages/rivet/scripts/prepare-workflow-lint.mjs .rivet-workflow-lint
+          lint_dir="$RUNNER_TEMP/rivet-workflow-lint"
+          rm -rf -- "$lint_dir"
+          mkdir -p "$lint_dir"
+          node packages/rivet/scripts/prepare-workflow-lint.mjs "$lint_dir"
       - name: Verify pinned workflow and review authority
         run: |
           npm --prefix packages/rivet run review-lock:check
@@ -68,4 +71,7 @@ jobs:
           reporter: github-annotations
           filter_mode: nofilter
           fail_level: any
-          actionlint_flags: -shellcheck= -pyflakes= .rivet-workflow-lint/*.yml
+          actionlint_flags: -shellcheck= -pyflakes= ${{ runner.temp }}/rivet-workflow-lint/*.yml
+      - name: Clean compiled workflow lint copies
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/rivet-workflow-lint"

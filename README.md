@@ -89,6 +89,12 @@ npx @coryparry/rivet app-verify --repository OWNER/REPOSITORY \
   --client-id CLIENT_ID --private-key-file /path/to/private-key.pem
 ```
 
+`--repository OWNER/REPOSITORY` is required and identifies the GitHub target.
+App commands load an existing `.github/rivet.json` from the current checkout so
+their authority reflects settings such as disabled issue triage. Use the
+optional `--repository-root /path/to/repository` to select another checkout.
+The root option does not replace the GitHub repository identity.
+
 Use `init --review-only` or explicit `init --repair` when selecting a mode. Add
 `--dry-run` to preview, `--setup-pr` to create a verified draft setup PR, or
 omit both to write directly to the existing checkout. Repair requires widening

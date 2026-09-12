@@ -8,15 +8,18 @@ import {
 
 const HISTORICAL_MANAGED_FILE_DIGESTS = Object.freeze({
   ".github/rivet/actions/prepare-review-context/index.mjs": Object.freeze([
+    "7793f43a0c2358df8b8016769ea0b5bcd0d7f500e44075c4b56627594aa651e8",
     "375aa15b58e9cb04db91a56977ef3646a8aabda7493511b45b9dcbaeb13e666e",
     "b90a18b6fc411e9f874b9f3a04324359da8eb9021e733b2ca9aa337a8fcd7766",
     "0e310aacc5426f3ce4de0f21e0c3a704cd2f7c63485f4a4994f007e67b1366ec",
   ]),
   ".github/rivet/aw/review-extension.md": Object.freeze([
+    "e9c73ff919385dd6ce1008a0d6fc2ae2903bf9d84e265e327b01a8271ad430a5",
     "3629111bc1b10c64929714554a75a50e928dda3c916b60acb985c8f7b3ebe143",
     "25e12a512ffaefb949aeb7ebc7923af6fb209c05d64b75192e7286869543b7d1",
   ]),
   ".github/workflows/rivet-review.lock.yml": Object.freeze([
+    "8bc0005de897c11711742295cfab2b7e4332b9ae30c0eef7237c224b483d6449",
     "b906670fbab37182a4d2af0ba59061a3d428479bd2f35636f42edc9fe7b965f1",
     "ef6334e8b5052b31c97ae73e29bb36454d5604c9f297fd7ca4b042772a20ee9a",
     "e63cc7d069968d1fab8c898a53b678b2dd0706419d77280c3e53c7259cb5d8f0",
@@ -35,6 +38,15 @@ const HISTORICAL_MANAGED_FILE_DIGESTS = Object.freeze({
     "6856015d99a66ac241e9f5600a8bf5f8c67ae53f18d424f48f89c61a8c8dffdc",
     "df90ebc17e309862552507de83deb26cb1f56b40cab05d4b1831dbf25a21bc8e",
     "f21719f73a77e48f8ee8fff5bbc55281c5486786868048319e0051045d3acfd0",
+  ]),
+  ".github/rivet/actions/prepare-issue-context/index.mjs": Object.freeze([
+    "86412a1f21fa5ff75eba117732900b3fbcdbdf456a9b433fcf2c3855278b64d1",
+  ]),
+  ".github/rivet/actions/publish-repair/index.mjs": Object.freeze([
+    "085905cfc89373753b57014ffc8f4aeeab71c7b7a5d85712b33cf2a52c52bdcc",
+  ]),
+  ".github/rivet/actions/validate-repair/index.mjs": Object.freeze([
+    "878f443247aacbb3b378b7057c4c3aa1c332a842041b697b81633d36fb79100b",
   ]),
 });
 const SUMMARY_REVIEW_EXTENSION = new URL(

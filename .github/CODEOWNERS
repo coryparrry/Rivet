@@ -1,5 +1,5 @@
 # Rivet is currently maintained from this repository-owner account.
-# Keep this file owned so governance changes cannot silently remove review routing.
+# This file documents routing; current branch rules do not require code-owner approval.
 
 * @coryparrry
 

@@ -40,10 +40,20 @@ function login(value, name) {
   return value;
 }
 
-function text(value, name, maximumBytes, { nullable = false } = {}) {
+function text(
+  value,
+  name,
+  maximumBytes,
+  { nullable = false, ineligibleOnExcess = false } = {},
+) {
   if (nullable && value === null) return "";
-  if (typeof value !== "string" || Buffer.byteLength(value) > maximumBytes)
+  if (typeof value !== "string")
     fail(`${name} is invalid or exceeds its byte budget`);
+  if (Buffer.byteLength(value) > maximumBytes) {
+    if (ineligibleOnExcess)
+      ineligible(`${name} exceeds the ${maximumBytes}-byte projection budget`);
+    fail(`${name} is invalid or exceeds its byte budget`);
+  }
   return value;
 }
 
@@ -201,7 +211,10 @@ function projectIssue(issue, metadata) {
     id: issue.id,
     number: issue.number,
     title: text(issue.title, "issue title", 1024),
-    body: text(issue.body, "issue body", 16 * 1024, { nullable: true }),
+    body: text(issue.body, "issue body", 16 * 1024, {
+      nullable: true,
+      ineligibleOnExcess: true,
+    }),
     author: login(issue.user?.login, "issue author"),
     authorAssociation: association(
       issue.author_association,
@@ -236,7 +249,9 @@ function projectComment(comment, index) {
   }
   return Object.freeze({
     id: positiveInteger(comment.id, `comment ${index + 1} id`),
-    body: text(comment.body, `comment ${index + 1} body`, 16 * 1024),
+    body: text(comment.body, `comment ${index + 1} body`, 16 * 1024, {
+      ineligibleOnExcess: true,
+    }),
     author: login(comment.user?.login, `comment ${index + 1} author`),
     authorType: text(
       comment.user?.type,

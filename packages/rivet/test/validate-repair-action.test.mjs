@@ -80,7 +80,9 @@ test("emits an exact-head receipt after isolated validation", async () => {
             "node:22-bookworm@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
           ),
         );
-        assert.ok(args.includes("type=bind,source=/workspace,target=/workspace"));
+        assert.ok(
+          args.includes("type=bind,source=/workspace,target=/workspace"),
+        );
         assert.equal(args.at(-1), "npm test");
         assert.equal(args.includes("/runner"), false);
         assert.equal(args.includes("read-only-token"), false);
@@ -103,4 +105,115 @@ test("emits an exact-head receipt after isolated validation", async () => {
     written.get("/runner/rivet-repair/receipt.json"),
     /"schemaVersion":1/,
   );
+});
+
+test("rejects a headerless ignored-file creation before issuing a receipt", async () => {
+  const headerlessIgnoredCreation = [
+    patch.trimEnd(),
+    "--- /dev/null",
+    "+++ b/node_modules/injected.js",
+    "@@ -0,0 +1 @@",
+    "+injected",
+    "",
+  ].join("\n");
+  let runCalls = 0;
+  let writeCalls = 0;
+  await assert.rejects(
+    () =>
+      runValidateRepairAction({
+        env: {
+          GITHUB_EVENT_PATH: "/event.json",
+          GH_AW_AGENT_OUTPUT: "/output.json",
+          GITHUB_WORKSPACE: "/workspace",
+          RUNNER_TEMP: "/runner",
+          GITHUB_TOKEN: "read-only-token",
+        },
+        fetchImpl: async () => {
+          throw new Error("GitHub must not be contacted for an invalid patch");
+        },
+        readFileImpl: async (filePath) =>
+          JSON.stringify(
+            filePath === "/event.json"
+              ? event
+              : {
+                  items: [
+                    {
+                      type: "validate_repair",
+                      patch: headerlessIgnoredCreation,
+                    },
+                  ],
+                },
+          ),
+        writeFileImpl: async () => {
+          writeCalls += 1;
+        },
+        runImpl: async () => {
+          runCalls += 1;
+        },
+      }),
+    /unanchored unified diff section/,
+  );
+  assert.equal(runCalls, 0);
+  assert.equal(writeCalls, 0);
+});
+
+test("rejects ignored files created during validation", async () => {
+  const headSha = "a".repeat(40);
+  const pull = {
+    head: {
+      sha: headSha,
+      ref: "repair-branch",
+      repo: { full_name: "owner/repository" },
+    },
+  };
+  const responses = [pull, pull];
+  const written = new Map();
+  let ignoredSnapshot = 0;
+  await assert.rejects(
+    () =>
+      runValidateRepairAction({
+        env: {
+          GITHUB_EVENT_PATH: "/event.json",
+          GH_AW_AGENT_OUTPUT: "/output.json",
+          GITHUB_WORKSPACE: "/workspace",
+          RUNNER_TEMP: "/runner",
+          GITHUB_TOKEN: "read-only-token",
+          RIVET_VALIDATION_COMMANDS_BASE64: Buffer.from(
+            JSON.stringify(["npm test"]),
+          ).toString("base64"),
+        },
+        fetchImpl: async () => ({
+          ok: true,
+          json: async () => responses.shift(),
+        }),
+        readFileImpl: async (filePath) =>
+          JSON.stringify(
+            filePath === "/event.json"
+              ? event
+              : { items: [{ type: "validate_repair", patch }] },
+          ),
+        writeFileImpl: async (filePath, content) =>
+          written.set(filePath, content),
+        mkdirImpl: async () => {},
+        runImpl: async (command, args, options) => {
+          if (command === "docker") return "";
+          if (command === "git" && args[0] === "diff") {
+            return args.includes("--name-only") ? "src/discount.mjs\0" : patch;
+          }
+          if (command === "git" && args[0] === "ls-files") {
+            if (args.includes("--ignored")) {
+              ignoredSnapshot += 1;
+              return ignoredSnapshot === 3 ? "node_modules/injected.js\0" : "";
+            }
+            return "";
+          }
+          if (command === "git" && args[0] === "hash-object") {
+            return `${"0".repeat(40)}\n`.repeat(args.length - 2);
+          }
+          return "";
+        },
+      }),
+    /unexpected ignored workspace paths/,
+  );
+  assert.equal(written.has("/runner/rivet-repair/receipt.json"), false);
 });

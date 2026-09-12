@@ -91,6 +91,13 @@ returned URL, create the App on GitHub.com, download its private key, keep the
 generated permissions unchanged, and install it only on the selected
 repository.
 
+`--repository OWNER/REPOSITORY` is the required GitHub owner and repository
+identity. App commands load `.github/rivet.json` from the current checkout when
+it exists. Add `--repository-root /path/to/repository` to `app-plan`,
+`app-configure`, and `app-verify` to select another checkout. The root option
+selects that local configuration; it does not replace the GitHub repository
+identity.
+
 Configure the repository variables and private-key secret:
 
 ```bash

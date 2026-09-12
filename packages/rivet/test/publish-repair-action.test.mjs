@@ -110,6 +110,56 @@ test("rejects protected, renamed, binary, and oversized patches", () => {
   );
 });
 
+test("rejects unanchored and mismatched unified diff sections", () => {
+  const headerlessIgnoredCreation = [
+    "diff --git a/src/discount.mjs b/src/discount.mjs",
+    "index 1234567..89abcde 100644",
+    "--- a/src/discount.mjs",
+    "+++ b/src/discount.mjs",
+    "@@ -1 +1 @@",
+    "-export const valid = false;",
+    "+export const valid = true;",
+    "--- /dev/null",
+    "+++ b/node_modules/injected.js",
+    "@@ -0,0 +1 @@",
+    "+injected",
+    "",
+  ].join("\n");
+  assert.throws(
+    () => inspectRepairPatch(headerlessIgnoredCreation),
+    /unanchored unified diff section/,
+  );
+
+  const mismatchedSection = [
+    "diff --git a/src/discount.mjs b/src/discount.mjs",
+    "index 1234567..89abcde 100644",
+    "--- a/src/other.mjs",
+    "+++ b/src/other.mjs",
+    "@@ -1 +1 @@",
+    "-export const valid = false;",
+    "+export const valid = true;",
+    "",
+  ].join("\n");
+  assert.throws(
+    () => inspectRepairPatch(mismatchedSection),
+    /unanchored unified diff section/,
+  );
+
+  assert.throws(
+    () =>
+      inspectRepairPatch(
+        [
+          "--- /dev/null",
+          "+++ b/node_modules/injected.js",
+          "@@ -0,0 +1 @@",
+          "+injected",
+          "",
+        ].join("\n"),
+      ),
+    /unanchored unified diff section/,
+  );
+});
+
 test("publishes only an exact-head validated artifact", async () => {
   const patch = [
     "diff --git a/src/discount.mjs b/src/discount.mjs",

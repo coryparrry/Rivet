@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import {
   prepareWorkflowLint,
   workflowLintProjection,
 } from "../scripts/prepare-workflow-lint.mjs";
+
+const execFileAsync = promisify(execFile);
+const prepareWorkflowLintPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../scripts/prepare-workflow-lint.mjs",
+);
 
 test("lint projection validates queueing and preserves other diagnostics and line positions", () => {
   const source = `name: Example
@@ -70,5 +79,32 @@ test("lint prepares all current stock and custom endpoint workflow fixtures", as
     assert.equal(document.concurrency?.queue, undefined);
     for (const job of Object.values(document.jobs))
       assert.equal(job.concurrency?.queue, undefined);
+  }
+});
+
+test("runs the workflow-lint CLI when invoked through a symlink", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "rivet-workflow-lint-cli-"),
+  );
+  try {
+    const alias = path.join(directory, "prepare-workflow-lint.mjs");
+    const outputDirectory = path.join(directory, "output");
+    await symlink(prepareWorkflowLintPath, alias);
+    const { stdout } = await execFileAsync(process.execPath, [
+      alias,
+      outputDirectory,
+    ]);
+    assert.equal(stdout, "Prepared 23 compiled workflows for actionlint\n");
+    assert.ok(
+      await readFile(
+        path.join(
+          outputDirectory,
+          "review-.github-workflows-rivet-review.lock.yml",
+        ),
+        "utf8",
+      ),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });

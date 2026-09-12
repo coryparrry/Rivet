@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const packageUrl = new URL("../package.json", import.meta.url);
@@ -23,6 +24,9 @@ export function tagForVersion(version) {
 export function validateReleasePackage(pkg, tag) {
   if (pkg.name !== PACKAGE_NAME) fail(`package name must be ${PACKAGE_NAME}`);
   if (pkg.private === true) fail("package must be publishable");
+  if (pkg.version.includes("-")) {
+    fail("prerelease versions must not be published to the latest dist-tag");
+  }
   if (pkg.publishConfig?.access !== "public") {
     fail("publishConfig.access must be public");
   }
@@ -43,7 +47,19 @@ export async function readPackage() {
   return JSON.parse(await readFile(packageUrl, "utf8"));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const [flag, tag] = process.argv.slice(2);
   if (flag !== "--tag" || !tag || process.argv.length !== 4) {
     fail("usage: node scripts/release-check.mjs --tag rivet-v<version>");

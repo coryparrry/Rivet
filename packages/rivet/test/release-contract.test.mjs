@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,10 @@ const releaseCheckPath = fileURLToPath(
 );
 const workflowUrl = new URL(
   "../../../.github/workflows/rivet-release.yml",
+  import.meta.url,
+);
+const checksWorkflowUrl = new URL(
+  "../../../.github/workflows/rivet-checks.yml",
   import.meta.url,
 );
 
@@ -54,6 +58,18 @@ test("rejects tags that do not exactly match the package version", async () => {
   );
 });
 
+test("rejects prerelease packages before they can publish to npm latest", async () => {
+  const pkg = await readPackage();
+  assert.throws(
+    () =>
+      validateReleasePackage(
+        { ...pkg, version: "0.1.16-rc.1" },
+        "rivet-v0.1.16-rc.1",
+      ),
+    /prerelease versions must not be published to the latest dist-tag/,
+  );
+});
+
 test("checks the release tag from the command-line entrypoint", async () => {
   const pkg = await readPackage();
   const tag = tagForVersion(pkg.version);
@@ -63,6 +79,27 @@ test("checks the release tag from the command-line entrypoint", async () => {
     { cwd: packageRoot },
   );
   assert.equal(stdout, `@coryparry/rivet@${pkg.version} is ready for ${tag}\n`);
+});
+
+test("runs the release-check CLI when invoked through a symlink", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "rivet-release-cli-"));
+  try {
+    const alias = join(directory, "release-check.mjs");
+    await symlink(releaseCheckPath, alias);
+    const pkg = await readPackage();
+    const tag = tagForVersion(pkg.version);
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [alias, "--tag", tag],
+      { cwd: packageRoot },
+    );
+    assert.equal(
+      stdout,
+      `@coryparry/rivet@${pkg.version} is ready for ${tag}\n`,
+    );
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("packs the executable and production payload without package tests", async () => {
@@ -160,6 +197,61 @@ test("uses a protected tag workflow with OIDC trusted publishing", async () => {
   );
 });
 
+test("runs root gates and manifest tests in the required PR check contexts", async () => {
+  const source = await readFile(checksWorkflowUrl, "utf8");
+  const workflow = parse(source);
+  const checkJob = workflow.jobs["rivet-checks"];
+  assert.equal(
+    checkJob.steps.find((step) => step.name === "Run repository checks")?.run,
+    "npm run check",
+  );
+  assert.equal(
+    checkJob.steps.find((step) => step.name === "Run root manifest tests")?.run,
+    "node --test scripts/refresh-release-manifest.test.mjs",
+  );
+  const policy = JSON.parse(
+    await readFile(
+      new URL("../../../.github/repository-rules.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const requiredChecks = policy.rulesets
+    .find((ruleset) => ruleset.target === "branch")
+    .rules.find((rule) => rule.type === "required_status_checks")
+    .parameters.required_status_checks.map((check) => check.context);
+  assert.deepEqual(requiredChecks, [
+    "rivet-checks (22.23.2)",
+    "rivet-checks (24.19.0)",
+    "actionlint",
+  ]);
+});
+
+test("keeps compiled workflow lint output in runner temp storage and cleans it", async () => {
+  const source = await readFile(checksWorkflowUrl, "utf8");
+  assert.match(source, /lint_dir=\"\$RUNNER_TEMP\/rivet-workflow-lint\"/);
+  assert.match(
+    source,
+    /actionlint_flags: -shellcheck= -pyflakes= \$\{\{ runner\.temp \}\}\/rivet-workflow-lint\/\*\.yml/,
+  );
+  assert.match(source, /run: rm -rf -- \"\$RUNNER_TEMP\/rivet-workflow-lint\"/);
+  assert.doesNotMatch(source, /\.rivet-workflow-lint/);
+});
+
+test("uses BSD-compatible mktemp templates for source archives", async () => {
+  const source = await readFile(
+    new URL("../../../scripts/release-source.sh", import.meta.url),
+    "utf8",
+  );
+  const mktempLines = source
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("mktemp "));
+  assert.ok(mktempLines.length > 0);
+  for (const line of mktempLines) {
+    assert.match(line, /XXXXXX[\"')\s]*$/);
+  }
+});
+
 test("release preparation targets the published Rivet component and version", async () => {
   const root = new URL("../../../", import.meta.url);
   const config = JSON.parse(
@@ -183,7 +275,7 @@ test("release preparation targets the published Rivet component and version", as
   assert.equal(component["changelog-path"], "/CHANGELOG.md");
 });
 
-test("release PRs trigger checks and publish tags through the dedicated token", async () => {
+test("release PR preparation binds to an exact head and keeps PAT credentials ephemeral", async () => {
   const source = await readFile(
     new URL(
       "../../../.github/workflows/rivet-release-please.yml",
@@ -200,6 +292,12 @@ test("release PRs trigger checks and publish tags through the dedicated token", 
   const job = workflow.jobs["release-please"];
   assert.equal(job.if, "github.ref == 'refs/heads/main'");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
+  assert.deepEqual(workflow.permissions, { contents: "read" });
+  const checkout = job.steps.find((step) =>
+    step.uses?.startsWith("actions/checkout@"),
+  );
+  assert.equal(checkout.with.token, undefined);
+  assert.equal(checkout.with["persist-credentials"], false);
   const release = job.steps.find((step) => step.id === "release-please");
   assert.match(
     release.uses,
@@ -217,13 +315,46 @@ test("release PRs trigger checks and publish tags through the dedicated token", 
   );
   assert(
     scripts.some((step) =>
-      step.run.includes("node scripts/refresh-release-manifest.mjs"),
+      step.run.includes("refreshManifest(process.env.GITHUB_WORKSPACE)"),
     ),
+  );
+  const resolveHead = scripts.find((step) => step.run.includes("gh api"));
+  assert.equal(resolveHead.id, "release-pr-head");
+  assert.equal(
+    resolveHead.env.RELEASE_PR,
+    "${{ steps.release-please.outputs.pr }}",
+  );
+  assert.match(
+    resolveHead.run,
+    /test \"\$head_repository\" = \"\$GITHUB_REPOSITORY\"/,
+  );
+  assert.match(resolveHead.run, /test \"\$branch\" = \"\$expected_branch\"/);
+  assert.ok(resolveHead.run.includes('[[ "$sha" =~ ^[0-9a-f]{40}$ ]]'));
+  const checkoutHead = scripts.find((step) =>
+    step.run.includes("refs\/heads\/\$RELEASE_PR_BRANCH"),
+  );
+  assert.match(checkoutHead.run, /git switch --detach \"\$RELEASE_PR_SHA\"/);
+  const refresh = scripts.find((step) =>
+    step.run.includes("refreshManifest(process.env.GITHUB_WORKSPACE)"),
+  );
+  assert.equal(
+    refresh.env.TRUSTED_MANIFEST_SCRIPT,
+    "${{ runner.temp }}/refresh-release-manifest.mjs",
+  );
+  assert.match(
+    refresh.run,
+    /pathToFileURL\(process\.env\.TRUSTED_MANIFEST_SCRIPT\)/,
   );
   const push = scripts.find((step) => step.run.includes("git push"));
   assert.match(
     push.run,
-    /git push origin HEAD:refs\/heads\/release-please--branches--main--components--rivet/,
+    /GIT_CONFIG_KEY_0=http\.https:\/\/github\.com\/\.extraheader/,
   );
+  assert.match(push.run, /HEAD:refs\/heads\/\$RELEASE_PR_BRANCH/);
+  assert.match(
+    source,
+    /git show \"\$GITHUB_SHA:scripts\/refresh-release-manifest\.mjs\"/,
+  );
+  assert.doesNotMatch(source, /persist-credentials: true/);
   assert(!source.includes("npm publish"));
 });
