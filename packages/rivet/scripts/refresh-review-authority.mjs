@@ -275,7 +275,10 @@ function reviewPolicyDeclaration(hashes) {
   const name = "RIVET_REVIEW_AUTHORITY_SHA256_BY_POLICY";
   return `export const ${name} = Object.freeze({\n${expectedKeys
     .map(
-      (key) => `  "${key}": "${digestValue(hashes[key], `${name}.${key}`)}",`,
+      (key) =>
+        `  ${JSON.stringify(key)}:\n    ${JSON.stringify(
+          digestValue(hashes[key], `${name}.${key}`),
+        )},`,
     )
     .join("\n")}\n});`;
 }

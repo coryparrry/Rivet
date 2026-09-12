@@ -233,6 +233,14 @@ test("compiles maintenance in both modes for every supported engine", async () =
     assert.match(updated, new RegExp(`${name} = `));
     assert.doesNotMatch(updated, new RegExp(`RIVET_MAINTENANCE_`));
   }
+  assert.match(
+    updated,
+    /  "automatic:inline:comment:claude":\n    "[0-9a-f]{64}",/,
+  );
+  assert.doesNotMatch(
+    updated,
+    /  "(?:automatic|disabled):(?:inline|summary):(?:comment|request-changes):(?:claude|codex|copilot|gemini)": "[0-9a-f]{64}",/,
+  );
   for (const name of MAINTENANCE_DECLARATION_NAMES) {
     assert.match(
       updatedMaintenance,
